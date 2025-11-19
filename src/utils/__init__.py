@@ -1,5 +1,5 @@
 """Utility functions"""
 from .deduplicator import JobDeduplicator
-from .ranker import JobRanker
+from .ranker import JobRanker, RankingConfig
 
-__all__ = ['JobDeduplicator', 'JobRanker']
+__all__ = ['JobDeduplicator', 'JobRanker', 'RankingConfig']
