@@ -116,7 +116,10 @@ class EnrichmentService:
 
             # Fetch from API
             try:
-                company_profile = await self._get_company_with_taiwan_team(job.company)
+                company_profile = await self._get_company_with_taiwan_team(
+                    job.company,
+                    job.company_website
+                )
 
                 if company_profile:
                     # Save to cache
@@ -164,18 +167,31 @@ class EnrichmentService:
         logger.info(f"Enrichment complete: {len(ranked_jobs)} jobs ranked")
         return ranked_jobs
 
-    async def _get_company_with_taiwan_team(self, company_name: str) -> Optional[CompanyProfile]:
+    async def _get_company_with_taiwan_team(
+        self,
+        company_name: str,
+        company_website: Optional[str] = None
+    ) -> Optional[CompanyProfile]:
         """
         Get company profile with Taiwan team members
 
         Args:
             company_name: Company name
+            company_website: Company website/domain (optional)
 
         Returns:
             CompanyProfile with Taiwan employee data
         """
         # Get company profile
-        company_profile = await self.enricher.get_company_profile(company_name)
+        if self.service == "coresignal":
+            # Coresignal requires website parameter
+            company_profile = await self.enricher.get_company_profile(
+                company_name,
+                company_website
+            )
+        else:
+            # PeopleDataLabs uses company name
+            company_profile = await self.enricher.get_company_profile(company_name)
 
         if not company_profile:
             return None

@@ -25,6 +25,7 @@ class JobListing:
     posted_date: datetime
     board_source: JobBoard
     id: Optional[str] = None
+    company_website: Optional[str] = None  # Company website/domain for enrichment
     salary_min: Optional[float] = None
     salary_max: Optional[str] = None
     job_type: Optional[str] = None  # Full-time, Part-time, Contract
@@ -55,6 +56,7 @@ class EnrichedJob:
     url: str
     posted_date: datetime
     board_source: JobBoard
+    company_website: Optional[str] = None
     salary_min: Optional[float] = None
     salary_max: Optional[str] = None
     job_type: Optional[str] = None
@@ -84,6 +86,7 @@ class EnrichedJob:
             url=job.url,
             posted_date=job.posted_date,
             board_source=job.board_source,
+            company_website=job.company_website,
             salary_min=job.salary_min,
             salary_max=job.salary_max,
             job_type=job.job_type,

@@ -21,31 +21,31 @@ async def test_coresignal_api():
     print(f"✅ API Key found: {api_key[:10]}...")
     print()
 
-    # Updated to v2 API (v1 endpoints deprecated as of late 2024)
+    # Updated to v2 API with multi-source endpoint
     base_url = "https://api.coresignal.com/cdapi/v2"
 
-    # Test company search endpoint
-    print("Testing Company Search Endpoint (v2 API)...")
+    # Test company enrich endpoint
+    print("Testing Company Enrich Endpoint (Multi-Source API)...")
     print("-" * 50)
 
-    company_name = "Stripe"
-    url = f"{base_url}/company_base/search/filter"
-    payload = {
-        'name': company_name,
-        'limit': 1
-    }
+    company_website = "stripe.com"
+    url = f"{base_url}/company_multi_source/enrich"
+    params = {'website': company_website}
 
     print(f"URL: {url}")
-    print(f"Headers: Authorization: Bearer {api_key[:10]}...")
-    print(f"Payload: {payload}")
+    print(f"Headers: apikey: {api_key[:10]}...")
+    print(f"Params: {params}")
     print()
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            response = await client.post(
+            response = await client.get(
                 url,
-                headers={'Authorization': f'Bearer {api_key}'},
-                json=payload
+                headers={
+                    'apikey': api_key,
+                    'Content-Type': 'application/json'
+                },
+                params=params
             )
 
             print(f"Status Code: {response.status_code}")
@@ -54,12 +54,15 @@ async def test_coresignal_api():
             print()
 
             if response.status_code == 200:
-                print("✅ Company search endpoint working!")
-                companies = response.json()
-                if companies:
-                    print(f"Found company: {companies[0].get('name')}")
-                    company_id = companies[0].get('id')
+                print("✅ Company enrich endpoint working!")
+                company_data = response.json()
+                if company_data:
+                    print(f"Found company: {company_data.get('name')}")
+                    company_id = company_data.get('id')
                     print(f"Company ID: {company_id}")
+                    print(f"Website: {company_data.get('website')}")
+                    print(f"Industry: {company_data.get('industry')}")
+                    print(f"Employees: {company_data.get('employee_count')}")
 
                     # Test employee search
                     print()
@@ -79,7 +82,10 @@ async def test_coresignal_api():
 
                     emp_response = await client.post(
                         emp_url,
-                        headers={'Authorization': f'Bearer {api_key}'},
+                        headers={
+                            'apikey': api_key,
+                            'Content-Type': 'application/json'
+                        },
                         json=emp_payload
                     )
 
