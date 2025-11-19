@@ -83,18 +83,15 @@ class JobDeduplicator:
         if not job.url:
             return False
 
-        job_domain = urlparse(job.url).netloc
-        job_path = urlparse(job.url).path
-
+        # For Indeed URLs with job key, compare the full URL (not just path)
+        # because path is always /viewjob but query params differ
         for existing in existing_jobs:
             if not existing.url:
                 continue
 
-            existing_domain = urlparse(existing.url).netloc
-            existing_path = urlparse(existing.url).path
-
-            # Same domain and very similar path = likely duplicate
-            if job_domain == existing_domain and job_path == existing_path:
+            # Exact URL match (most reliable)
+            if job.url == existing.url:
+                logger.debug(f"URL match: {job.url}")
                 return True
 
         return False
