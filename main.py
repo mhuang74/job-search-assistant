@@ -44,9 +44,10 @@ def cli():
 @click.option('--remote-only/--no-remote-only', default=True, help='Filter for remote jobs only')
 @click.option('--save/--no-save', default=True, help='Save results to database')
 @click.option('--export', type=click.Path(), help='Export to CSV file')
+@click.option('--browser', default='chromium', type=click.Choice(['chromium', 'firefox']), help='Browser type (firefox is often less detectable)')
 @click.option('--headless/--no-headless', default=True, help='Run browser in headless mode')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose debug logging')
-def search(query: str, location: str, max_results: int, board: str, remote_only: bool, save: bool, export: Optional[str], headless: bool, verbose: bool):
+def search(query: str, location: str, max_results: int, board: str, remote_only: bool, save: bool, export: Optional[str], browser: str, headless: bool, verbose: bool):
     """
     Search for jobs on job boards
 
@@ -73,8 +74,11 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
 
     console.print()
 
+    if browser == 'firefox':
+        console.print(f"[cyan]🦊 Using Firefox browser (often less detectable)[/cyan]")
+
     # Run async scraping
-    jobs = asyncio.run(_search_jobs(query, location, max_results, board, remote_only, headless))
+    jobs = asyncio.run(_search_jobs(query, location, max_results, board, remote_only, browser, headless))
 
     if not jobs:
         console.print("[yellow]No jobs found.[/yellow]")
@@ -230,10 +234,10 @@ def cleanup(days: int):
     console.print(f"[green]Deleted {deleted} jobs older than {days} days[/green]")
 
 
-async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool, headless: bool = True):
+async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool, browser: str = 'chromium', headless: bool = True):
     """Async job search"""
     if board == 'indeed':
-        config = {'headless': headless}
+        config = {'headless': headless, 'browser': browser}
         async with IndeedScraper(config=config) as scraper:
             jobs = await scraper.search(
                 query=query,

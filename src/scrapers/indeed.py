@@ -48,6 +48,9 @@ class IndeedScraper(BaseScraper):
             # Allow headless mode override via config
             headless = self.config.get('headless', True)
 
+            # Allow browser type override (firefox is often less detectable)
+            browser_type = self.config.get('browser', 'chromium')  # 'chromium' or 'firefox'
+
             # Allow timezone/locale override via config (defaults to Taiwan)
             timezone_id = self.config.get('timezone_id', 'Asia/Taipei')
             locale = self.config.get('locale', 'en-US')  # Keep en-US since accessing Indeed.com
@@ -55,22 +58,31 @@ class IndeedScraper(BaseScraper):
             # Randomize screen size to avoid fingerprinting
             import random
             screen = random.choice(SCREEN_SIZES)
-            logger.info(f"Initializing browser (headless={headless}, timezone={timezone_id}, screen={screen['width']}x{screen['height']})...")
+            logger.info(f"Initializing browser ({browser_type}, headless={headless}, timezone={timezone_id}, screen={screen['width']}x{screen['height']})...")
 
-            self.browser = await self.playwright.chromium.launch(
-                headless=headless,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    f'--window-size={screen["width"]},{screen["height"]}',
-                    '--disable-web-security',
-                    '--disable-features=IsolateOrigins,site-per-process',
-                    '--disable-site-isolation-trials',
-                    '--disable-features=VizDisplayCompositor',
-                ]
-            )
+            # Launch browser based on type
+            if browser_type == 'firefox':
+                # Firefox is often less detectable
+                self.browser = await self.playwright.firefox.launch(
+                    headless=headless,
+                    args=[]  # Firefox doesn't need as many stealth args
+                )
+            else:
+                # Chromium with stealth args
+                self.browser = await self.playwright.chromium.launch(
+                    headless=headless,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--no-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        f'--window-size={screen["width"]},{screen["height"]}',
+                        '--disable-web-security',
+                        '--disable-features=IsolateOrigins,site-per-process',
+                        '--disable-site-isolation-trials',
+                        '--disable-features=VizDisplayCompositor',
+                    ]
+                )
 
             # Create a context with anti-detection
             # Use Taiwan timezone by default to match user's actual location
@@ -150,21 +162,41 @@ class IndeedScraper(BaseScraper):
                     break  # Success, exit retry loop
                 except Exception as e:
                     error_name = type(e).__name__
-                    if 'TargetClosedError' in error_name or 'BrowserClosedError' in error_name:
+                    error_str = str(e)
+
+                    # Check if it's a browser/connection closed error
+                    is_browser_closed = any([
+                        'TargetClosedError' in error_name,
+                        'BrowserClosedError' in error_name,
+                        'Connection closed' in error_str,
+                        'Target page, context or browser has been closed' in error_str,
+                        'Session closed' in error_str,
+                    ])
+
+                    if is_browser_closed:
                         retry_count += 1
                         if retry_count < max_retries:
                             wait_time = 2 ** retry_count  # Exponential backoff: 2, 4, 8 seconds
-                            logger.warning(f"Browser closed unexpectedly. Retrying in {wait_time}s... (attempt {retry_count}/{max_retries})")
+                            logger.warning(f"Browser closed unexpectedly ({error_name}). Retrying in {wait_time}s... (attempt {retry_count}/{max_retries})")
                             await asyncio.sleep(wait_time)
                             # Reinitialize browser
                             await self._close_browser()
                             await self._init_browser()
                         else:
-                            logger.error(f"Failed after {max_retries} retries. Indeed may be blocking automation.")
-                            logger.error("Suggestions:")
-                            logger.error("  1. Run with --no-headless to see what's happening")
-                            logger.error("  2. Wait 15-30 minutes before trying again")
-                            logger.error("  3. Consider using a proxy or VPN")
+                            logger.error(f"Failed after {max_retries} retries. Indeed is aggressively blocking automation.")
+                            logger.error(f"Error: {error_str}")
+                            logger.error("")
+                            logger.error("⚠️  Indeed is detecting Playwright/Chromium as a bot")
+                            logger.error("")
+                            logger.error("Next steps to try:")
+                            logger.error("  1. Run with --no-headless to see what Indeed shows:")
+                            logger.error("     python main.py search 'your query' --no-headless --verbose")
+                            logger.error("")
+                            logger.error("  2. Try using Firefox instead (config option)")
+                            logger.error("")
+                            logger.error("  3. Wait 15-30 minutes, then try again")
+                            logger.error("")
+                            logger.error("  4. Use a proxy or VPN to change your IP")
                             raise
                     else:
                         # Different error, don't retry
