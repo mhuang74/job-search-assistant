@@ -119,32 +119,76 @@ def scrape_jobs(board, query):
 
 **Recommended Approach**: **Paid API (Primary)**
 
-**Option A: Proxycurl** (Recommended)
-- **Cost**: $0.01-0.05 per company profile
+> **Note**: Proxycurl shut down in June 2025. The following are current alternatives as of November 2025.
+
+**Option A: Coresignal** ⭐ (Recommended)
+- **Cost**: Starting at $49/mo (credit-based)
+- **Free Trial**: 14 days with 200 credits (no credit card required)
 - **Pros**:
-  - Real-time LinkedIn data
-  - Employee search with location filters
-  - Company size, industry, headquarters
+  - 694M+ employee records, 92M+ company records
+  - Employee API with location filtering (Taiwan)
+  - Company API with industry, size, headquarters
+  - Data refreshed every 6 hours
   - No risk of LinkedIn account ban
   - Reliable structured data
+  - Self-service signup (no sales call required)
 - **Cons**:
-  - Recurring costs
-  - Usage-based pricing
+  - Monthly subscription required
+  - Need to contact sales for pricing beyond starter tier
+  - Credit consumption varies by endpoint
 
-**Endpoint Usage**:
+**API Usage**:
 ```python
-# Company Profile: $0.01/call
-GET /api/linkedin/company
+# Company data endpoint
+GET /api/company/{company_id}
 
-# Employee Search with Taiwan filter: $0.03/call
-GET /api/linkedin/company/employees/?country=Taiwan
+# Employee search with Taiwan filter
+GET /api/employee/search?location=Taiwan&company={company_id}
 
-# Budget estimate:
-# 100 jobs × $0.04 = $4.00
-# 1000 jobs × $0.04 = $40.00
+# Budget estimate (based on starter plan):
+# $49/mo for 250 credits
+# ~$0.20 per enrichment (company + employee search)
+# 250 jobs/mo = $49
+# 100 jobs/mo = $20 (estimated)
 ```
 
-**Option B: Custom LinkedIn Scraper** (Not Recommended)
+**Option B: People Data Labs** (Good for Small Volume)
+- **Cost**: Free tier (100 lookups/mo), Pro $98/mo
+- **Free Trial**: 100 free person/company lookups monthly
+- **Pros**:
+  - 1.5B+ person profiles
+  - Person enrichment: $0.28/record ($0.20 at scale)
+  - Company enrichment: $0.10/record ($0.05 at scale)
+  - Good for testing with free tier
+  - Location-based employee search
+- **Cons**:
+  - Higher per-record costs than Coresignal
+  - Best for lower volumes (<500/mo)
+
+**Budget estimate**:
+```python
+# 100 jobs × ($0.10 company + $0.28 employee search) = $38/mo
+# Free tier covers first 100 lookups
+```
+
+**Option C: Fresh LinkedIn Scraper API** (RapidAPI) (High Volume)
+- **Cost**: $200/mo (100K requests), $500/mo (500K requests)
+- **Free Tier**: Basic plan for testing
+- **Pros**:
+  - Very low cost per request ($0.001-0.002)
+  - High throughput (120-300 req/min)
+  - Best for high volume (>1000 jobs/mo)
+- **Cons**:
+  - Higher base cost ($200/mo minimum for serious use)
+  - Only cost-effective at high volume
+
+**Budget estimate**:
+```python
+# 1000 jobs × 2 requests × $0.002 = $4/mo (+ $200 base)
+# Total: $204/mo for 1000 jobs
+```
+
+**Option D: Custom LinkedIn Scraper** (Not Recommended)
 - **Cons**:
   - High risk of account suspension
   - Requires maintaining cookies/sessions
@@ -155,9 +199,12 @@ GET /api/linkedin/company/employees/?country=Taiwan
 - **Pros**:
   - No per-call costs
 
-**Verdict**: **Use Proxycurl**. LinkedIn actively blocks scrapers, and the cost ($0.04/job) is reasonable compared to development time and risk.
+**Verdict**:
+- **For <200 jobs/mo**: Use **People Data Labs** free tier, then pay-as-you-go
+- **For 200-1000 jobs/mo**: Use **Coresignal** ($49-99/mo)
+- **For >1000 jobs/mo**: Use **Fresh LinkedIn Scraper API** on RapidAPI ($200+/mo)
 
-**Alternative**: **PhantomBuster** ($30-$128/mo) if you need more LinkedIn automation, but Proxycurl is cleaner for this use case.
+LinkedIn actively blocks scrapers, so paid APIs are essential for reliability.
 
 #### 3. Data Storage
 
@@ -342,50 +389,109 @@ ua = UserAgent()
 
 ### 2. LinkedIn Enrichment Module
 
-**Using Proxycurl**:
+**Using Coresignal API** (Recommended):
 ```python
 import httpx
 
 class LinkedInEnricher:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, service: str = "coresignal"):
         self.api_key = api_key
-        self.base_url = "https://nubela.co/proxycurl/api"
+        self.service = service
+
+        if service == "coresignal":
+            self.base_url = "https://api.coresignal.com/cdapi/v1"
+        elif service == "peopledatalabs":
+            self.base_url = "https://api.peopledatalabs.com/v5"
+
         self.client = httpx.AsyncClient()
 
-    async def get_company_profile(self, linkedin_url: str) -> dict:
-        """Cost: $0.01"""
-        response = await self.client.get(
-            f"{self.base_url}/linkedin/company",
-            params={'url': linkedin_url},
-            headers={'Authorization': f'Bearer {self.api_key}'}
-        )
-        return response.json()
+    async def get_company_profile(self, company_name: str) -> dict:
+        """Get company data from Coresignal"""
+        if self.service == "coresignal":
+            # Search for company by name
+            response = await self.client.post(
+                f"{self.base_url}/professional_network/company/search/filter",
+                headers={'Authorization': f'Bearer {self.api_key}'},
+                json={
+                    'name': company_name,
+                    'limit': 1
+                }
+            )
+            companies = response.json()
+            if companies:
+                return companies[0]
+        return None
 
-    async def get_employees_in_taiwan(self, linkedin_url: str) -> List[dict]:
-        """Cost: ~$0.03"""
-        response = await self.client.get(
-            f"{self.base_url}/linkedin/company/employees/",
-            params={
-                'url': linkedin_url,
-                'country': 'Taiwan',
-                'enrich_profiles': 'skip'  # Save costs
-            },
-            headers={'Authorization': f'Bearer {self.api_key}'}
-        )
-        return response.json()['employees']
+    async def get_employees_in_taiwan(self, company_id: str) -> List[dict]:
+        """Get employees in Taiwan from Coresignal"""
+        if self.service == "coresignal":
+            response = await self.client.post(
+                f"{self.base_url}/professional_network/employee/search/filter",
+                headers={'Authorization': f'Bearer {self.api_key}'},
+                json={
+                    'company_id': company_id,
+                    'location': 'Taiwan',
+                    'limit': 100
+                }
+            )
+            return response.json()
+        return []
 
     async def enrich_job(self, job: JobListing) -> EnrichedJob:
-        # Find LinkedIn company URL (may need search)
-        company_profile = await self.get_company_profile(job.linkedin_url)
-        taiwan_employees = await self.get_employees_in_taiwan(job.linkedin_url)
+        # Search for company profile
+        company_profile = await self.get_company_profile(job.company)
+
+        if not company_profile:
+            return EnrichedJob(**job.__dict__, taiwan_team_count=0)
+
+        # Get Taiwan employees
+        taiwan_employees = await self.get_employees_in_taiwan(
+            company_profile['id']
+        )
 
         return EnrichedJob(
             **job.__dict__,
-            company_size=company_profile['company_size'],
-            industry=company_profile['industry'],
+            company_size=company_profile.get('company_size'),
+            industry=company_profile.get('industry'),
             taiwan_team_count=len(taiwan_employees),
             taiwan_team_members=taiwan_employees
         )
+```
+
+**Alternative: People Data Labs**:
+```python
+class PeopleDataLabsEnricher:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = "https://api.peopledatalabs.com/v5"
+        self.client = httpx.AsyncClient()
+
+    async def get_company_profile(self, company_name: str, website: str = None) -> dict:
+        """Cost: $0.10 per successful match"""
+        params = {'name': company_name, 'api_key': self.api_key}
+        if website:
+            params['website'] = website
+
+        response = await self.client.get(
+            f"{self.base_url}/company/enrich",
+            params=params
+        )
+        return response.json()
+
+    async def search_employees_in_taiwan(self, company_name: str) -> List[dict]:
+        """Cost: $0.28 per successful match"""
+        response = await self.client.get(
+            f"{self.base_url}/person/search",
+            params={
+                'query': {
+                    'location_country': 'Taiwan',
+                    'job_company_name': company_name
+                },
+                'size': 100,
+                'api_key': self.api_key
+            }
+        )
+        return response.json().get('data', [])
 ```
 
 **Cost Optimization**:
@@ -487,8 +593,8 @@ python main.py search "senior software engineer" --remote --board indeed
 **Goal**: Automated enrichment
 
 **Scope**:
-- [ ] Proxycurl integration
-- [ ] Automatic company LinkedIn URL discovery
+- [ ] Coresignal or People Data Labs API integration
+- [ ] Automatic company name matching
 - [ ] Employee location extraction
 - [ ] Caching to minimize API costs
 
@@ -515,21 +621,38 @@ python main.py search "senior software engineer" --remote --board indeed
 
 ## Cost Analysis
 
-### Monthly Operating Costs (for 1000 jobs/month)
+### Monthly Operating Costs
 
+#### Option 1: Low Volume (<200 jobs/month)
+| Component | Service | Cost |
+|-----------|---------|------|
+| Job Scraping | Custom Playwright | $0 |
+| LinkedIn Enrichment | People Data Labs (free tier) | $0 |
+| Infrastructure | Local | $0 |
+| **Total** | | **$0/mo** |
+
+#### Option 2: Medium Volume (200-500 jobs/month)
+| Component | Service | Cost |
+|-----------|---------|------|
+| Job Scraping (fallback) | ScraperAPI (occasional use) | $10-20 |
+| LinkedIn Enrichment | Coresignal (250 credits) | $49 |
+| Infrastructure | Local/VPS | $0-10 |
+| **Total** | | **$59-79/mo** |
+
+#### Option 3: High Volume (1000 jobs/month)
 | Component | Service | Cost |
 |-----------|---------|------|
 | Job Scraping (fallback) | ScraperAPI (1000 calls) | $49 |
-| LinkedIn Enrichment | Proxycurl (1000 jobs × $0.04) | $40 |
-| Infrastructure | Local/VPS | $0-10 |
-| **Total** | | **$89-99/mo** |
+| LinkedIn Enrichment | Coresignal (custom plan) | $99-149 |
+| Infrastructure | VPS | $10 |
+| **Total** | | **$158-208/mo** |
 
 ### Cost Optimization Strategies
 
 1. **Aggressive Caching**:
    - Cache company data for 30 days
    - Only enrich new companies
-   - Reduces Proxycurl costs by ~70%
+   - Reduces LinkedIn API costs by ~70%
 
 2. **Smart Scraping**:
    - Start with custom scrapers (free)
@@ -541,14 +664,22 @@ python main.py search "senior software engineer" --remote --board indeed
    - Reduces total job volume
    - Process 200 jobs/month instead of 1000
 
-**Optimized Monthly Cost**: **$15-25/mo**
+4. **Use Free Tiers**:
+   - People Data Labs: 100 free lookups/month
+   - Coresignal: 14-day free trial (200 credits)
+   - Test thoroughly before committing
+
+**Optimized Monthly Cost**:
+- Small scale (<200 jobs): **$0/mo** (using free tiers)
+- Medium scale (200-500 jobs): **$20-50/mo**
+- Large scale (1000+ jobs): **$100-150/mo**
 
 ## Development vs. Buy Decision Matrix
 
 | Component | Build Custom | Buy API | Recommendation |
 |-----------|--------------|---------|----------------|
 | Job Board Scraping | Medium effort, full control | Easy, costly | **Hybrid**: Build + API fallback |
-| LinkedIn Enrichment | High effort, risky | Easy, reliable | **Buy**: Use Proxycurl |
+| LinkedIn Enrichment | High effort, risky | Easy, reliable | **Buy**: Use Coresignal or People Data Labs |
 | Data Storage | Easy, full control | N/A | **Build**: PostgreSQL |
 | Ranking | Easy, customizable | N/A | **Build**: Custom algorithm |
 | Orchestration | Medium effort | N/A | **Build**: Celery/asyncio |
@@ -576,7 +707,7 @@ alembic==1.13.0
 psycopg2-binary==2.9.9  # PostgreSQL driver
 
 # API integrations
-proxycurl-py==0.1.0  # Proxycurl client
+# Note: Use httpx for Coresignal/People Data Labs APIs (no dedicated client needed)
 
 # Task queue (optional, for production)
 celery==5.3.4
@@ -648,7 +779,9 @@ pytest-playwright==0.4.3
 
 1. **Review & Approve**: Review this specification
 2. **Environment Setup**: Set up Python 3.10+ environment
-3. **API Keys**: Register for Proxycurl (free tier to start)
+3. **API Keys**:
+   - Register for People Data Labs (100 free lookups) or
+   - Sign up for Coresignal (14-day free trial with 200 credits)
 4. **Phase 1 Development**: Start with MVP implementation
 5. **Testing**: Test with 10-20 jobs before scaling
 

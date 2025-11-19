@@ -193,59 +193,159 @@ jobs = response.json()['jobs']
 
 ## LinkedIn Scraping Services Comparison
 
-### Option 1: Proxycurl ⭐ (Recommended)
+> **Important Update**: Proxycurl shut down in June 2025. The following are current alternatives as of November 2025.
 
-**Website**: https://nubela.co/proxycurl
-**Cost**: Pay-as-you-go, ~$0.01-0.05 per endpoint
+### Option 1: Coresignal ⭐ (Recommended)
+
+**Website**: https://coresignal.com/
+**Cost**: Starting at $49/mo (credit-based pricing)
 
 **Pricing**:
-- Company Profile: $0.01/call
-- Employee Listing: $0.03/call
-- Person Profile: $0.02/call
+- Starter Plan: $49/mo with 250 API credits
+- 14-day free trial with 200 credits (no credit card required)
+- Self-service signup (no sales call needed)
+- Custom pricing for higher volumes
+
+**Data Coverage**:
+- 694M+ employee records
+- 92M+ company records
+- 399M+ job posting records
+- Data refreshed every 6 hours
 
 **Pros**:
-- Most affordable LinkedIn API
-- No monthly minimum
-- Real-time data
-- Reliable and fast
-- Good documentation
-- Filter employees by location
+- Excellent price-to-value ratio
+- Employee API with location filtering (Taiwan)
+- Company API with industry, size, headquarters
+- No LinkedIn account ban risk
+- Reliable and regularly updated
+- Free trial to test before committing
+- Multiple data processing levels
 
 **Cons**:
-- Costs add up at scale
-- Need to find company LinkedIn URL first
+- Monthly subscription (not pure pay-per-use)
+- Need to contact sales for pricing beyond starter tier
+- Credit consumption varies by endpoint
 
 **Best For**:
-- Small to medium volume
-- Pay-per-use model
-- This exact use case
+- Medium to high volume (200-1000 jobs/mo)
+- Predictable monthly costs
+- Production use
 
 **Example**:
 ```python
-import requests
+import httpx
 
-# Get company profile
-response = requests.get(
-    'https://nubela.co/proxycurl/api/linkedin/company',
-    params={'url': 'https://linkedin.com/company/stripe'},
-    headers={'Authorization': 'Bearer YOUR_API_KEY'}
+# Search for company
+response = await httpx.post(
+    'https://api.coresignal.com/cdapi/v1/professional_network/company/search/filter',
+    headers={'Authorization': 'Bearer YOUR_API_KEY'},
+    json={'name': 'Stripe', 'limit': 1}
 )
 
 # Get employees in Taiwan
-response = requests.get(
-    'https://nubela.co/proxycurl/api/linkedin/company/employees/',
-    params={
-        'url': 'https://linkedin.com/company/stripe',
-        'country': 'Taiwan',
-        'enrich_profiles': 'skip'  # Save money
-    },
-    headers={'Authorization': 'Bearer YOUR_API_KEY'}
+response = await httpx.post(
+    'https://api.coresignal.com/cdapi/v1/professional_network/employee/search/filter',
+    headers={'Authorization': 'Bearer YOUR_API_KEY'},
+    json={
+        'company_id': company_id,
+        'location': 'Taiwan',
+        'limit': 100
+    }
 )
 ```
 
 ---
 
-### Option 2: PhantomBuster
+### Option 2: People Data Labs ⭐ (Good for Small Volume)
+
+**Website**: https://www.peopledatalabs.com/
+**Cost**: Free tier available, then pay-as-you-go
+
+**Pricing**:
+- Free: 100 person/company lookups per month
+- Pro: $98/mo (350 person enrichments, 1K company lookups)
+- Enterprise: Custom pricing (starts ~$2,500/mo)
+- Per-record: Person $0.28, Company $0.10 (lower at scale)
+
+**Data Coverage**:
+- 1.5B+ person profiles
+- Comprehensive company data
+- Location-based filtering
+
+**Pros**:
+- Free tier perfect for testing
+- Pay-per-use model (after free tier)
+- Good for low volumes (<200 jobs/mo)
+- Location-based employee search
+- No LinkedIn account ban risk
+
+**Cons**:
+- Higher per-record costs than Coresignal
+- Costs add up quickly at scale
+- Better suited for smaller volumes
+
+**Best For**:
+- Small volume (<200 jobs/mo)
+- Testing and MVP development
+- Pay-per-use preference
+
+**Example**:
+```python
+import httpx
+
+# Enrich company
+response = await httpx.get(
+    'https://api.peopledatalabs.com/v5/company/enrich',
+    params={
+        'name': 'Stripe',
+        'api_key': 'YOUR_API_KEY'
+    }
+)
+
+# Search employees in Taiwan
+response = await httpx.get(
+    'https://api.peopledatalabs.com/v5/person/search',
+    params={
+        'query': {
+            'location_country': 'Taiwan',
+            'job_company_name': 'Stripe'
+        },
+        'size': 100,
+        'api_key': 'YOUR_API_KEY'
+    }
+)
+```
+
+---
+
+### Option 3: Fresh LinkedIn Scraper API (RapidAPI)
+
+**Website**: https://rapidapi.com/freshdata-freshdata-default/api/fresh-linkedin-profile-data/
+**Cost**: $200-500/mo for serious use
+
+**Pricing**:
+- Basic: Free (testing only)
+- Ultra: $200/mo for 100K requests ($0.002/request)
+- Mega: $500/mo for 500K requests ($0.001/request)
+
+**Pros**:
+- Very low cost per request
+- High throughput (120-300 req/min)
+- Best for high volume (>1000 jobs/mo)
+- No LinkedIn account needed
+
+**Cons**:
+- High base cost ($200/mo minimum)
+- Only cost-effective at high volume
+- Need to manage RapidAPI integration
+
+**Best For**:
+- High volume (>1000 jobs/mo)
+- When per-request cost matters more than base cost
+
+---
+
+### Option 4: PhantomBuster
 
 **Website**: https://phantombuster.com/
 **Cost**: $30-128/mo
@@ -272,11 +372,11 @@ response = requests.get(
 - When you need browser automation
 - Sales/marketing teams
 
-**Verdict**: 🤔 Good but Proxycurl is better for this use case
+**Verdict**: 🤔 Not recommended - Coresignal and People Data Labs are better alternatives
 
 ---
 
-### Option 3: Custom Selenium/Playwright Scraper
+### Option 5: Custom Selenium/Playwright Scraper
 
 **Cost**: Free (risk of account ban)
 
@@ -299,28 +399,28 @@ response = requests.get(
 
 ---
 
-### Option 4: Piloterr
+### Option 6: Piloterr
 
 **Website**: https://piloterr.com/
-**Cost**: $19-99/mo
+**Cost**: Starting at $99/mo
 
 **Pros**:
-- Affordable
-- LinkedIn automation
-- Browser-based
+- LinkedIn Profile & Company scrapers
+- 50 free credits to test
+- 60M+ companies in database
 
 **Cons**:
-- Uses your LinkedIn account (ban risk)
-- Limited compared to Proxycurl
-- Smaller community
+- Uses browser automation (potential ban risk)
+- More expensive than Coresignal starter
+- Less data coverage than Coresignal
 
-**Verdict**: 🤔 Cheaper but riskier than Proxycurl
+**Verdict**: 🤔 Coresignal and People Data Labs offer better value
 
 ---
 
 ## Recommended Stack Summary
 
-### For Budget-Conscious (<$25/mo)
+### For Budget-Conscious / MVP (<$50/mo)
 
 ```
 Job Scraping:
@@ -328,15 +428,31 @@ Job Scraping:
 └── Fallback: ScraperAPI free tier or pay-per-use
 
 LinkedIn:
-└── Proxycurl (pay-per-use, ~$8-15/mo for 200-400 enrichments)
+└── People Data Labs free tier (100 lookups/mo) + pay-per-use
 
 Storage:
 └── SQLite (FREE)
 
-Total: ~$8-15/mo
+Total: ~$0-20/mo
 ```
 
-### For Reliability-Focused (<$100/mo)
+### For Medium Volume (<$100/mo)
+
+```
+Job Scraping:
+├── Primary: Custom Playwright (FREE)
+└── Fallback: ScraperAPI occasional use (~$10-20/mo)
+
+LinkedIn:
+└── Coresignal Starter ($49/mo for 250 credits)
+
+Storage:
+└── PostgreSQL on VPS (~$5-10/mo)
+
+Total: ~$64-79/mo
+```
+
+### For High Volume / Production (<$200/mo)
 
 ```
 Job Scraping:
@@ -344,28 +460,13 @@ Job Scraping:
 └── Fallback: ScraperAPI Hobby ($49/mo)
 
 LinkedIn:
-└── Proxycurl (~$40/mo for 1000 enrichments)
+├── Coresignal custom plan ($99-149/mo) OR
+└── Fresh LinkedIn API on RapidAPI ($200/mo)
 
 Storage:
-└── PostgreSQL on VPS (~$5-10/mo)
+└── PostgreSQL on VPS (~$10/mo)
 
-Total: ~$90-100/mo
-```
-
-### For MVP/Testing (<$10/mo)
-
-```
-Job Scraping:
-└── Playwright only (FREE)
-
-LinkedIn:
-├── Manual lookup for testing
-└── Proxycurl for 100-200 jobs (~$8/mo)
-
-Storage:
-└── SQLite (FREE)
-
-Total: ~$0-8/mo
+Total: ~$158-209/mo
 ```
 
 ---
@@ -393,24 +494,24 @@ playwright install chromium
 
 **Cost**: $0
 
-### Week 2: LinkedIn Integration (Proxycurl)
+### Week 2: LinkedIn Integration
 
 **Goal**: Auto-enrich 50 jobs
 
 ```bash
-# 1. Sign up for Proxycurl
-# - Free tier: $0 (100 free credits)
-# - Or $10 prepaid
+# 1. Sign up for People Data Labs or Coresignal
+# - People Data Labs: 100 free lookups/mo
+# - Coresignal: 14-day free trial (200 credits)
 
 # 2. Build enrichment module
-# - Find company LinkedIn URL
+# - Search company by name
 # - Get Taiwan employee count
 # - Store in database
 
 # 3. Test with 50 jobs
 ```
 
-**Cost**: $0-2 (using free tier + minimal paid)
+**Cost**: $0 (using free tiers)
 
 ### Week 3: Scale Up (Multi-Board)
 
@@ -420,33 +521,37 @@ playwright install chromium
 # 1. Add RemoteOK scraper
 # 2. Add We Work Remotely scraper
 # 3. Implement deduplication
-# 4. Enrich all with Proxycurl
+# 4. Enrich with People Data Labs or Coresignal
 ```
 
-**Cost**: ~$8-12 (200 jobs × $0.04)
+**Cost**: $0-49 (free tier or Coresignal starter)
 
 ### Week 4: Production Ready
 
 **Goal**: Automated, scheduled, reliable
 
 ```bash
-# 1. Add ScraperAPI fallback (sign up for $49 plan)
+# 1. Add ScraperAPI fallback (optional)
 # 2. Build scheduling (cron or Celery)
 # 3. Add notifications (email/Slack)
 # 4. Build simple web UI (optional)
 ```
 
-**Cost**: ~$55-60/mo (ScraperAPI + Proxycurl)
+**Cost**: ~$49-99/mo (Coresignal + optional ScraperAPI)
 
 ---
 
 ## API Key Setup Checklist
 
 ### Required for MVP
-- [ ] Proxycurl API key (https://nubela.co/proxycurl)
-  - Sign up
-  - Get free credits
-  - Add payment method for pay-as-you-go
+Choose ONE LinkedIn enrichment service:
+- [ ] **Option A**: People Data Labs API key (https://www.peopledatalabs.com/)
+  - Sign up for free tier (100 lookups/mo)
+  - No credit card required for free tier
+
+- [ ] **Option B**: Coresignal API key (https://coresignal.com/)
+  - Sign up for 14-day free trial (200 credits)
+  - Starter plan: $49/mo for production
 
 ### Optional (add later)
 - [ ] ScraperAPI key (https://www.scraperapi.com/)
@@ -456,7 +561,12 @@ playwright install chromium
 ### Configuration (.env file)
 ```bash
 # .env
-PROXYCURL_API_KEY=your_key_here
+# LinkedIn Enrichment (choose one)
+PEOPLEDATALABS_API_KEY=your_key_here
+# OR
+CORESIGNAL_API_KEY=your_key_here
+
+# Job Scraping (optional)
 SCRAPERAPI_KEY=your_key_here  # optional
 
 # Database
@@ -479,7 +589,7 @@ TARGET_COMPANY_SIZES=11-50,51-200
 ```python
 # Only re-enrich company if >30 days old
 if company.last_enriched < datetime.now() - timedelta(days=30):
-    enrich(company)  # Costs $0.04
+    enrich(company)  # Costs API credits
 else:
     use_cached_data(company)  # Free
 ```
@@ -491,9 +601,9 @@ else:
 # Don't enrich immediately, batch daily
 jobs = scrape_all_boards()  # Get 50 jobs
 unique_companies = dedupe_companies(jobs)  # Only 20 unique
-enrich_companies(unique_companies)  # 20 × $0.04 = $0.80
+enrich_companies(unique_companies)  # 20 API calls
 
-# vs enriching per job: 50 × $0.04 = $2.00
+# vs enriching per job: 50 API calls
 ```
 
 **Savings**: 60% on LinkedIn costs
@@ -509,11 +619,12 @@ enrich(filtered)  # Only enrich relevant jobs
 **Savings**: 60% on LinkedIn costs
 
 ### 4. Free Tier Stacking
-- Proxycurl: 100 free credits
+- People Data Labs: 100 free lookups/month
+- Coresignal: 14-day free trial (200 credits)
 - ScraperAPI: 1000 free credits/month trial
 - Use free tiers for testing
 
-**Savings**: $0 for first month
+**Savings**: $0 for first 1-2 months
 
 ---
 
@@ -522,24 +633,29 @@ enrich(filtered)  # Only enrich relevant jobs
 ```
 START: How many jobs/month will you process?
 
-├─ <100 jobs/month
+├─ <200 jobs/month
 │  ├─ Job Scraping: Playwright (free)
-│  ├─ LinkedIn: Proxycurl pay-per-use (~$4/mo)
-│  └─ Total: ~$4/mo ✅
+│  ├─ LinkedIn: People Data Labs free tier + pay-per-use
+│  └─ Total: ~$0-20/mo ✅
 │
-├─ 100-500 jobs/month
-│  ├─ Job Scraping: Playwright + ScraperAPI fallback ($49/mo)
-│  ├─ LinkedIn: Proxycurl (~$20/mo)
-│  └─ Total: ~$70/mo ✅
+├─ 200-500 jobs/month
+│  ├─ Job Scraping: Playwright + ScraperAPI fallback (~$10-20/mo)
+│  ├─ LinkedIn: Coresignal Starter ($49/mo)
+│  └─ Total: ~$59-69/mo ✅
 │
-└─ >500 jobs/month
+├─ 500-1000 jobs/month
+│  ├─ Job Scraping: Playwright + ScraperAPI ($49/mo)
+│  ├─ LinkedIn: Coresignal custom plan ($99-149/mo)
+│  └─ Total: ~$148-198/mo 💰
+│
+└─ >1000 jobs/month
    ├─ Job Scraping: ScraperAPI ($99-249/mo)
-   ├─ LinkedIn: Proxycurl (~$40+/mo)
-   └─ Total: ~$140-290/mo 💰
+   ├─ LinkedIn: Fresh LinkedIn API on RapidAPI ($200+/mo)
+   └─ Total: ~$299-449/mo 💰💰
 
    Consider: Are you running a business?
    ├─ Yes: Worth the cost ✅
-   └─ No: Reduce job volume or find sponsors
+   └─ No: Reduce job volume to stay under $200/mo
 ```
 
 ---
@@ -548,9 +664,15 @@ START: How many jobs/month will you process?
 
 ### First Month (Testing Phase)
 ```
-Proxycurl free tier: $0
-- 100 free credits
+Option A - People Data Labs:
+- Free tier: 100 lookups/month
 - Test with 50 jobs (2 calls each = 100 credits)
+- Cost: $0 ✅
+
+Option B - Coresignal:
+- 14-day free trial: 200 credits
+- Test with 100 jobs (2 calls each = 200 credits)
+- Cost: $0 ✅
 
 ScraperAPI trial: $0
 - 1000 free API calls
@@ -561,16 +683,20 @@ Total: $0 ✅
 
 ### Second Month (Production)
 ```
-Proxycurl: $8-15
-- 200-400 enrichments
-- 200 jobs × $0.04 = $8
+Option A - People Data Labs:
+- 100 free + pay-per-use
+- 200 jobs × $0.38 = ~$38 (after free tier)
+
+Option B - Coresignal:
+- Starter plan: $49/mo (250 credits)
+- Covers ~125 jobs/month
 
 ScraperAPI: $0-49
 - Use custom scraper mostly
 - Only pay if needed
 
-Total: $8-64
-Average: ~$30
+Total: $0-88
+Average: ~$20-50
 ```
 
 ---
@@ -582,7 +708,7 @@ Average: ~$30
 - **Tasks**: Update selectors when sites change
 - **Difficulty**: Easy-Medium
 
-### API Integrations (Proxycurl, ScraperAPI)
+### API Integrations (Coresignal/PDL, ScraperAPI)
 - **Time**: <1 hour/month
 - **Tasks**: Monitor usage, adjust budgets
 - **Difficulty**: Easy
@@ -604,19 +730,27 @@ For your use case (personal job search assistant, Taiwan team focus):
 ```
 ✅ Custom Playwright scrapers (primary)
 ✅ ScraperAPI (fallback only, pay-as-needed)
-✅ Proxycurl (LinkedIn enrichment)
+✅ People Data Labs (LinkedIn enrichment - start with free tier)
+   OR Coresignal (for higher volume, better value at $49/mo)
 ✅ PostgreSQL or SQLite (storage)
 ✅ Python with asyncio (orchestration)
 ```
 
 **Expected Monthly Cost**:
-- Development/Testing: $0-10
-- Light Production (100 jobs): $10-20
-- Heavy Production (500 jobs): $60-80
+- Development/Testing: $0 (using free tiers)
+- Light Production (<200 jobs): $0-20
+- Medium Production (200-500 jobs): $49-79
+- Heavy Production (500-1000 jobs): $148-198
 
 **Time to MVP**: 2-3 weeks
 
 **Maintenance**: 4-7 hours/month
+
+**Why this approach**:
+- Start with free tiers (People Data Labs) to validate concept
+- Scale to Coresignal when you need reliability and higher volume
+- Custom Playwright gives you control and zero recurring costs for job scraping
+- Can start at $0/month and scale predictably as your needs grow
 
 This balances cost, reliability, and control perfectly for a personal project that could scale to commercial use.
 
