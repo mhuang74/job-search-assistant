@@ -38,7 +38,11 @@ class IndeedScraper(BaseScraper):
             # Allow headless mode override via config
             headless = self.config.get('headless', True)
 
-            logger.info(f"Initializing browser (headless={headless})...")
+            # Allow timezone/locale override via config (defaults to Taiwan)
+            timezone_id = self.config.get('timezone_id', 'Asia/Taipei')
+            locale = self.config.get('locale', 'en-US')  # Keep en-US since accessing Indeed.com
+
+            logger.info(f"Initializing browser (headless={headless}, timezone={timezone_id})...")
 
             self.browser = await self.playwright.chromium.launch(
                 headless=headless,
@@ -52,11 +56,12 @@ class IndeedScraper(BaseScraper):
             )
 
             # Create a context with anti-detection
+            # Use Taiwan timezone by default to match user's actual location
             self.context = await self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent=self._get_random_user_agent(),
-                locale='en-US',
-                timezone_id='America/New_York',
+                locale=locale,
+                timezone_id=timezone_id,
             )
 
             # Add extra headers to look more like a real browser
