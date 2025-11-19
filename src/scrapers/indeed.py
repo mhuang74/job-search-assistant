@@ -11,6 +11,16 @@ from bs4 import BeautifulSoup
 from .base import BaseScraper
 from ..models import JobListing, JobBoard
 
+# Screen size options for randomization (anti-fingerprinting)
+SCREEN_SIZES = [
+    {'width': 1024, 'height': 768},
+    {'width': 1280, 'height': 800},
+    {'width': 1366, 'height': 768},
+    {'width': 1440, 'height': 900},
+    {'width': 1920, 'height': 1080},
+    {'width': 2560, 'height': 1440},
+]
+
 
 class IndeedScraper(BaseScraper):
     """Indeed scraper using Playwright for JavaScript rendering"""
@@ -42,7 +52,10 @@ class IndeedScraper(BaseScraper):
             timezone_id = self.config.get('timezone_id', 'Asia/Taipei')
             locale = self.config.get('locale', 'en-US')  # Keep en-US since accessing Indeed.com
 
-            logger.info(f"Initializing browser (headless={headless}, timezone={timezone_id})...")
+            # Randomize screen size to avoid fingerprinting
+            import random
+            screen = random.choice(SCREEN_SIZES)
+            logger.info(f"Initializing browser (headless={headless}, timezone={timezone_id}, screen={screen['width']}x{screen['height']})...")
 
             self.browser = await self.playwright.chromium.launch(
                 headless=headless,
@@ -51,14 +64,18 @@ class IndeedScraper(BaseScraper):
                     '--no-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--window-size=1920,1080',
+                    f'--window-size={screen["width"]},{screen["height"]}',
+                    '--disable-web-security',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--disable-site-isolation-trials',
+                    '--disable-features=VizDisplayCompositor',
                 ]
             )
 
             # Create a context with anti-detection
             # Use Taiwan timezone by default to match user's actual location
             self.context = await self.browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
+                viewport=screen,
                 user_agent=self._get_random_user_agent(),
                 locale=locale,
                 timezone_id=timezone_id,
@@ -122,7 +139,36 @@ class IndeedScraper(BaseScraper):
         max_pages = min((max_results // 15) + 1, 10)  # Indeed shows ~15 jobs per page
 
         while len(jobs) < max_results and page_num < max_pages:
-            page_jobs = await self._scrape_page(query, location, page_num, remote_only)
+            # Retry logic for browser crashes
+            max_retries = 3
+            retry_count = 0
+            page_jobs = []
+
+            while retry_count < max_retries:
+                try:
+                    page_jobs = await self._scrape_page(query, location, page_num, remote_only)
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    error_name = type(e).__name__
+                    if 'TargetClosedError' in error_name or 'BrowserClosedError' in error_name:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            wait_time = 2 ** retry_count  # Exponential backoff: 2, 4, 8 seconds
+                            logger.warning(f"Browser closed unexpectedly. Retrying in {wait_time}s... (attempt {retry_count}/{max_retries})")
+                            await asyncio.sleep(wait_time)
+                            # Reinitialize browser
+                            await self._close_browser()
+                            await self._init_browser()
+                        else:
+                            logger.error(f"Failed after {max_retries} retries. Indeed may be blocking automation.")
+                            logger.error("Suggestions:")
+                            logger.error("  1. Run with --no-headless to see what's happening")
+                            logger.error("  2. Wait 15-30 minutes before trying again")
+                            logger.error("  3. Consider using a proxy or VPN")
+                            raise
+                    else:
+                        # Different error, don't retry
+                        raise
 
             if not page_jobs:
                 logger.info(f"No more results on page {page_num}")
@@ -131,8 +177,8 @@ class IndeedScraper(BaseScraper):
             jobs.extend(page_jobs)
             page_num += 1
 
-            # Random delay between pages
-            await self._random_delay(2, 4)
+            # Random delay between pages (increased to 5-10s based on research)
+            await self._random_delay(5, 10)
 
         logger.info(f"Found {len(jobs)} jobs from Indeed")
         return jobs[:max_results]
@@ -168,16 +214,92 @@ class IndeedScraper(BaseScraper):
 
             page.set_default_timeout(30000)
 
-            # Mask webdriver property
-            await page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
+            # Comprehensive stealth scripts to mask automation (based on selenium-stealth)
+            # Randomize hardware properties
+            hardware_concurrency = random.choice([2, 4, 8, 16])
+            device_memory = random.choice([4, 8, 16])
+
+            await page.add_init_script(f"""
+                // Mask webdriver property
+                Object.defineProperty(navigator, 'webdriver', {{
                     get: () => undefined
-                });
+                }});
+
+                // Override chrome property
+                window.chrome = {{
+                    runtime: {{}}
+                }};
+
+                // Override permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({{ state: Notification.permission }}) :
+                        originalQuery(parameters)
+                );
+
+                // Override plugins to look like real browser
+                Object.defineProperty(navigator, 'plugins', {{
+                    get: () => [1, 2, 3, 4, 5]
+                }});
+
+                // Override languages to match locale
+                Object.defineProperty(navigator, 'languages', {{
+                    get: () => ['en-US', 'en']
+                }});
+
+                // WebGL vendor spoofing (critical for anti-fingerprinting)
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(parameter) {{
+                    if (parameter === 37445) {{
+                        return 'Intel Inc.';  // UNMASKED_VENDOR_WEBGL
+                    }}
+                    if (parameter === 37446) {{
+                        return 'Intel Iris OpenGL Engine';  // UNMASKED_RENDERER_WEBGL
+                    }}
+                    return getParameter.call(this, parameter);
+                }};
+
+                // Navigator vendor
+                Object.defineProperty(navigator, 'vendor', {{
+                    get: () => 'Google Inc.'
+                }});
+
+                // Hardware properties (randomized)
+                Object.defineProperty(navigator, 'hardwareConcurrency', {{
+                    get: () => {hardware_concurrency}
+                }});
+
+                Object.defineProperty(navigator, 'deviceMemory', {{
+                    get: () => {device_memory}
+                }});
+
+                // Platform
+                Object.defineProperty(navigator, 'platform', {{
+                    get: () => 'Win32'
+                }});
+
+                // Max touch points
+                Object.defineProperty(navigator, 'maxTouchPoints', {{
+                    get: () => 0
+                }});
             """)
+
+            # Add random delay before navigation (simulate human behavior)
+            import random
+            delay = random.uniform(3.0, 7.0)  # Increased from 1.5-3.5s based on research
+            logger.debug(f"Adding {delay:.2f}s delay to simulate human behavior...")
+            await page.wait_for_timeout(int(delay * 1000))
 
             # Navigate to search results
             logger.info(f"Navigating to Indeed page {page_num}...")
-            response = await page.goto(url, wait_until='domcontentloaded')
+            try:
+                response = await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            except Exception as nav_error:
+                logger.error(f"Navigation failed: {type(nav_error).__name__}: {nav_error}")
+                logger.error("This often means Indeed detected automation and closed the browser")
+                logger.error("Try running with --no-headless flag to debug")
+                raise
 
             # Log response details
             logger.info(f"Response status: {response.status}")
