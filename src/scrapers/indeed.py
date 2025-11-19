@@ -360,22 +360,31 @@ class IndeedScraper(BaseScraper):
             # Get page content
             content = await page.content()
 
-            # Check for CAPTCHA or blocking indicators
-            if 'captcha' in content.lower():
+            # Parse with BeautifulSoup first
+            soup = BeautifulSoup(content, 'html.parser')
+
+            # Check for actual CAPTCHA elements (more specific than just searching for the word)
+            captcha_elements = soup.find_all(['div', 'iframe', 'form'],
+                                            class_=re.compile(r'(recaptcha|captcha-container|hcaptcha)', re.I))
+            has_captcha_challenge = soup.find(string=re.compile(r'(verify you.re human|solve.*captcha|complete.*verification)', re.I))
+
+            if captcha_elements or has_captcha_challenge:
                 logger.error("❌ CAPTCHA detected on Indeed page!")
-                logger.error("Indeed is blocking automated access. Try:")
-                logger.error("  1. Use headless=False in browser settings")
-                logger.error("  2. Add random delays between requests")
-                logger.error("  3. Use ScraperAPI as fallback")
+                logger.error("Indeed is showing a verification challenge.")
+                # Save HTML for inspection
+                debug_file = f"debug_indeed_captcha_{page_num}.html"
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                logger.error(f"💾 Saved page HTML to {debug_file} for inspection")
                 return []
 
-            if 'blocked' in content.lower() or 'unusual traffic' in content.lower():
+            # Check for explicit blocking messages
+            if soup.find(string=re.compile(r'(blocked|unusual traffic|too many requests)', re.I)):
                 logger.error("❌ Indeed detected unusual traffic - you may be blocked")
                 logger.error("Your IP might be temporarily blocked. Wait 15-30 minutes.")
                 return []
 
-            # Parse with BeautifulSoup
-            soup = BeautifulSoup(content, 'html.parser')
+            # Find job cards
             job_cards = soup.find_all('div', class_=re.compile(r'job_seen_beacon'))
 
             if not job_cards:
