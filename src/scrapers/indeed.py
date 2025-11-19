@@ -1,5 +1,6 @@
 """Indeed job board scraper"""
 import asyncio
+import random
 import re
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -56,7 +57,6 @@ class IndeedScraper(BaseScraper):
             locale = self.config.get('locale', 'en-US')  # Keep en-US since accessing Indeed.com
 
             # Randomize screen size to avoid fingerprinting
-            import random
             screen = random.choice(SCREEN_SIZES)
             logger.info(f"Initializing browser ({browser_type}, headless={headless}, timezone={timezone_id}, screen={screen['width']}x{screen['height']})...")
 
@@ -318,7 +318,6 @@ class IndeedScraper(BaseScraper):
             """)
 
             # Add random delay before navigation (simulate human behavior)
-            import random
             delay = random.uniform(3.0, 7.0)  # Increased from 1.5-3.5s based on research
             logger.debug(f"Adding {delay:.2f}s delay to simulate human behavior...")
             await page.wait_for_timeout(int(delay * 1000))
