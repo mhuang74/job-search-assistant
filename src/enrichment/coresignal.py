@@ -19,7 +19,8 @@ class CoresignalEnricher:
             api_key: Coresignal API key
         """
         self.api_key = api_key
-        self.base_url = "https://api.coresignal.com/cdapi/v1"
+        # Updated to v2 API (v1 endpoints deprecated)
+        self.base_url = "https://api.coresignal.com/cdapi/v2"
         self.client = httpx.AsyncClient(timeout=30.0)
 
     async def __aenter__(self):
@@ -39,13 +40,20 @@ class CoresignalEnricher:
             CompanyProfile if found, None otherwise
         """
         try:
+            # Updated to v2 endpoint (professional_network -> company_base)
+            url = f"{self.base_url}/company_base/search/filter"
+            payload = {'name': company_name, 'limit': 1}
+
+            logger.debug(f"Coresignal company search - URL: {url}")
+            logger.debug(f"Coresignal company search - Payload: {payload}")
+
             response = await self.client.post(
-                f"{self.base_url}/professional_network/company/search/filter",
-                headers={'Authorization': f'Bearer {self.api_key}'},
-                json={
-                    'name': company_name,
-                    'limit': 1
-                }
+                url,
+                headers={
+                    'Authorization': f'Bearer {self.api_key}',
+                    'Content-Type': 'application/json'
+                },
+                json=payload
             )
 
             if response.status_code == 200:
@@ -95,14 +103,25 @@ class CoresignalEnricher:
             List of employee dictionaries
         """
         try:
+            # Updated to v2 endpoint (professional_network -> employee_base)
+            url = f"{self.base_url}/employee_base/search/filter"
+            # Note: v2 API uses 'country' instead of 'location' for Taiwan filtering
+            payload = {
+                'company_id': company_id,
+                'country': 'Taiwan',
+                'limit': max_results
+            }
+
+            logger.debug(f"Coresignal employee search - URL: {url}")
+            logger.debug(f"Coresignal employee search - Payload: {payload}")
+
             response = await self.client.post(
-                f"{self.base_url}/professional_network/employee/search/filter",
-                headers={'Authorization': f'Bearer {self.api_key}'},
-                json={
-                    'company_id': company_id,
-                    'location': 'Taiwan',
-                    'limit': max_results
-                }
+                url,
+                headers={
+                    'Authorization': f'Bearer {self.api_key}',
+                    'Content-Type': 'application/json'
+                },
+                json=payload
             )
 
             if response.status_code == 200:

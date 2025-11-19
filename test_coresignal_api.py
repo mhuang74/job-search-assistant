@@ -21,14 +21,15 @@ async def test_coresignal_api():
     print(f"✅ API Key found: {api_key[:10]}...")
     print()
 
-    base_url = "https://api.coresignal.com/cdapi/v1"
+    # Updated to v2 API (v1 endpoints deprecated as of late 2024)
+    base_url = "https://api.coresignal.com/cdapi/v2"
 
     # Test company search endpoint
-    print("Testing Company Search Endpoint...")
+    print("Testing Company Search Endpoint (v2 API)...")
     print("-" * 50)
 
     company_name = "Stripe"
-    url = f"{base_url}/professional_network/company/search/filter"
+    url = f"{base_url}/company_base/search/filter"
     payload = {
         'name': company_name,
         'limit': 1
@@ -62,13 +63,13 @@ async def test_coresignal_api():
 
                     # Test employee search
                     print()
-                    print("Testing Employee Search Endpoint...")
+                    print("Testing Employee Search Endpoint (v2 API)...")
                     print("-" * 50)
 
-                    emp_url = f"{base_url}/professional_network/employee/search/filter"
+                    emp_url = f"{base_url}/employee_base/search/filter"
                     emp_payload = {
                         'company_id': company_id,
-                        'location': 'Taiwan',
+                        'country': 'Taiwan',  # v2 uses 'country' instead of 'location'
                         'limit': 10
                     }
 
