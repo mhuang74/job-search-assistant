@@ -44,17 +44,37 @@ def cli():
 @click.option('--remote-only/--no-remote-only', default=True, help='Filter for remote jobs only')
 @click.option('--save/--no-save', default=True, help='Save results to database')
 @click.option('--export', type=click.Path(), help='Export to CSV file')
-def search(query: str, location: str, max_results: int, board: str, remote_only: bool, save: bool, export: Optional[str]):
+@click.option('--headless/--no-headless', default=True, help='Run browser in headless mode')
+@click.option('--verbose', '-v', is_flag=True, help='Enable verbose debug logging')
+def search(query: str, location: str, max_results: int, board: str, remote_only: bool, save: bool, export: Optional[str], headless: bool, verbose: bool):
     """
     Search for jobs on job boards
 
     Example: python main.py search "software engineer" --max-results 20
+
+    For debugging Indeed blocks, try:
+      python main.py search "your query" --no-headless --verbose
     """
+    # Configure logging level
+    if verbose:
+        logger.remove()
+        logger.add(lambda msg: console.print(msg, end=''), level="DEBUG")
+        console.print("[yellow]🐛 Verbose logging enabled[/yellow]")
+    else:
+        logger.remove()
+        logger.add(lambda msg: console.print(msg, end=''), level="INFO")
+
     console.print(f"\n[bold blue]Searching for:[/bold blue] {query}")
-    console.print(f"[dim]Location: {location} | Board: {board} | Max results: {max_results}[/dim]\n")
+    console.print(f"[dim]Location: {location} | Board: {board} | Max results: {max_results}[/dim]")
+
+    if not headless:
+        console.print(f"[yellow]⚠️  Running in VISIBLE browser mode (debugging)[/yellow]")
+        console.print(f"[dim]You'll see the browser window open. This helps identify blocking issues.[/dim]")
+
+    console.print()
 
     # Run async scraping
-    jobs = asyncio.run(_search_jobs(query, location, max_results, board, remote_only))
+    jobs = asyncio.run(_search_jobs(query, location, max_results, board, remote_only, headless))
 
     if not jobs:
         console.print("[yellow]No jobs found.[/yellow]")
@@ -210,10 +230,11 @@ def cleanup(days: int):
     console.print(f"[green]Deleted {deleted} jobs older than {days} days[/green]")
 
 
-async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool):
+async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool, headless: bool = True):
     """Async job search"""
     if board == 'indeed':
-        async with IndeedScraper() as scraper:
+        config = {'headless': headless}
+        async with IndeedScraper(config=config) as scraper:
             jobs = await scraper.search(
                 query=query,
                 location=location,

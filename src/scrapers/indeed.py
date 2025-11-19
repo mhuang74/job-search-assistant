@@ -31,21 +31,55 @@ class IndeedScraper(BaseScraper):
         await self._close_browser()
 
     async def _init_browser(self):
-        """Initialize Playwright browser"""
+        """Initialize Playwright browser with anti-detection measures"""
         if self.browser is None:
             self.playwright = await async_playwright().start()
+
+            # Allow headless mode override via config
+            headless = self.config.get('headless', True)
+
+            logger.info(f"Initializing browser (headless={headless})...")
+
             self.browser = await self.playwright.chromium.launch(
-                headless=True,
+                headless=headless,
                 args=[
                     '--disable-blink-features=AutomationControlled',
                     '--no-sandbox',
-                    '--disable-dev-shm-usage'
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--window-size=1920,1080',
                 ]
             )
-            logger.info("Browser initialized")
+
+            # Create a context with anti-detection
+            self.context = await self.browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent=self._get_random_user_agent(),
+                locale='en-US',
+                timezone_id='America/New_York',
+            )
+
+            # Add extra headers to look more like a real browser
+            await self.context.set_extra_http_headers({
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Cache-Control': 'max-age=0',
+            })
+
+            logger.info("✅ Browser initialized with anti-detection measures")
 
     async def _close_browser(self):
         """Close Playwright browser"""
+        if hasattr(self, 'context') and self.context:
+            await self.context.close()
+            self.context = None
         if self.browser:
             await self.browser.close()
             self.browser = None
@@ -119,21 +153,87 @@ class IndeedScraper(BaseScraper):
         url = f"{self.base_url}/jobs?{urlencode(params)}"
         logger.debug(f"Scraping: {url}")
 
+        page = None
         try:
-            page = await self.browser.new_page()
+            # Use context instead of browser directly for better anti-detection
+            if hasattr(self, 'context'):
+                page = await self.context.new_page()
+            else:
+                page = await self.browser.new_page()
+
             page.set_default_timeout(30000)
 
+            # Mask webdriver property
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+
             # Navigate to search results
-            await page.goto(url, wait_until='domcontentloaded')
-            await page.wait_for_timeout(2000)  # Wait for JavaScript
+            logger.info(f"Navigating to Indeed page {page_num}...")
+            response = await page.goto(url, wait_until='domcontentloaded')
+
+            # Log response details
+            logger.info(f"Response status: {response.status}")
+            logger.debug(f"Response URL: {response.url}")
+            logger.debug(f"Response headers: {response.headers}")
+
+            # Check for blocking
+            if response.status == 403:
+                logger.error("❌ Indeed returned 403 Forbidden - likely blocked")
+                logger.error("Try using a different user agent or enable headless=False")
+                page_content = await page.content()
+                logger.debug(f"Page content preview: {page_content[:500]}")
+                return []
+            elif response.status == 429:
+                logger.error("❌ Indeed returned 429 Too Many Requests - rate limited")
+                logger.error("Wait a few minutes before trying again")
+                return []
+            elif response.status >= 400:
+                logger.error(f"❌ Indeed returned error status: {response.status}")
+                page_content = await page.content()
+                logger.debug(f"Page content preview: {page_content[:500]}")
+                return []
+
+            # Wait for JavaScript
+            await page.wait_for_timeout(2000)
 
             # Get page content
             content = await page.content()
-            await page.close()
+
+            # Check for CAPTCHA or blocking indicators
+            if 'captcha' in content.lower():
+                logger.error("❌ CAPTCHA detected on Indeed page!")
+                logger.error("Indeed is blocking automated access. Try:")
+                logger.error("  1. Use headless=False in browser settings")
+                logger.error("  2. Add random delays between requests")
+                logger.error("  3. Use ScraperAPI as fallback")
+                return []
+
+            if 'blocked' in content.lower() or 'unusual traffic' in content.lower():
+                logger.error("❌ Indeed detected unusual traffic - you may be blocked")
+                logger.error("Your IP might be temporarily blocked. Wait 15-30 minutes.")
+                return []
 
             # Parse with BeautifulSoup
             soup = BeautifulSoup(content, 'html.parser')
             job_cards = soup.find_all('div', class_=re.compile(r'job_seen_beacon'))
+
+            if not job_cards:
+                logger.warning(f"⚠️  No job cards found on page {page_num}")
+                logger.debug("Possible reasons:")
+                logger.debug("  - Indeed changed their HTML structure")
+                logger.debug("  - Page didn't load completely")
+                logger.debug("  - No results for your query")
+
+                # Save page HTML for debugging
+                debug_file = f"debug_indeed_page_{page_num}.html"
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                logger.debug(f"💾 Saved page HTML to {debug_file} for inspection")
+
+                return []
 
             jobs = []
             for card in job_cards:
@@ -143,13 +243,29 @@ class IndeedScraper(BaseScraper):
                         jobs.append(job)
                 except Exception as e:
                     logger.warning(f"Failed to parse job card: {e}")
+                    logger.debug(f"Card HTML: {str(card)[:200]}")
                     continue
 
+            logger.info(f"✅ Successfully parsed {len(jobs)} jobs from page {page_num}")
             return jobs
 
         except Exception as e:
-            logger.error(f"Failed to scrape page {page_num}: {e}")
+            logger.error(f"❌ Failed to scrape page {page_num}: {type(e).__name__}: {e}")
+            logger.exception("Full exception traceback:")
+
+            if page:
+                try:
+                    # Take screenshot for debugging
+                    screenshot_path = f"debug_indeed_error_page_{page_num}.png"
+                    await page.screenshot(path=screenshot_path)
+                    logger.error(f"📸 Saved error screenshot to {screenshot_path}")
+                except:
+                    pass
+
             return []
+        finally:
+            if page:
+                await page.close()
 
     def _parse_job_card(self, card) -> Optional[JobListing]:
         """Parse a single job card"""
