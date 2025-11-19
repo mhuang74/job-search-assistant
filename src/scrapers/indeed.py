@@ -378,27 +378,36 @@ class IndeedScraper(BaseScraper):
                 logger.error(f"💾 Saved page HTML to {debug_file} for inspection")
                 return []
 
-            # Check for explicit blocking messages
-            if soup.find(string=re.compile(r'(blocked|unusual traffic|too many requests)', re.I)):
-                logger.error("❌ Indeed detected unusual traffic - you may be blocked")
-                logger.error("Your IP might be temporarily blocked. Wait 15-30 minutes.")
-                return []
-
-            # Find job cards
+            # Find job cards FIRST (to avoid false positive blocking detection)
             job_cards = soup.find_all('div', class_=re.compile(r'job_seen_beacon'))
 
             if not job_cards:
                 logger.warning(f"⚠️  No job cards found on page {page_num}")
-                logger.debug("Possible reasons:")
-                logger.debug("  - Indeed changed their HTML structure")
-                logger.debug("  - Page didn't load completely")
-                logger.debug("  - No results for your query")
 
                 # Save page HTML for debugging
                 debug_file = f"debug_indeed_page_{page_num}.html"
                 with open(debug_file, 'w', encoding='utf-8') as f:
                     f.write(content)
-                logger.debug(f"💾 Saved page HTML to {debug_file} for inspection")
+                logger.warning(f"💾 Saved page HTML to {debug_file} for inspection")
+
+                # Check if this is due to blocking (only if no job cards found)
+                # Look for actual blocking UI elements, not just keywords
+                blocking_indicators = [
+                    soup.find('div', class_=re.compile(r'(blocked|access.*denied)', re.I)),
+                    soup.find(id=re.compile(r'(blocked|access.*denied)', re.I)),
+                    soup.find('h1', string=re.compile(r'(blocked|access.*denied|unusual traffic)', re.I)),
+                ]
+
+                if any(blocking_indicators):
+                    logger.error("❌ Indeed may be blocking your requests")
+                    logger.error("Detected blocking UI elements on page")
+                    logger.error(f"Check {debug_file} to see what Indeed is showing")
+                else:
+                    logger.debug("Possible reasons for no job cards:")
+                    logger.debug("  - Indeed changed their HTML structure")
+                    logger.debug("  - No results for your query")
+                    logger.debug("  - JavaScript not fully loaded")
+                    logger.debug(f"  - Check {debug_file} to see what's on the page")
 
                 return []
 
