@@ -1,7 +1,7 @@
 """Database storage and operations"""
 from typing import List, Optional
 from sqlalchemy import create_engine, and_, or_
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, joinedload
 from datetime import datetime, timedelta
 from loguru import logger
 
@@ -210,7 +210,9 @@ class JobStorage:
         try:
             cutoff_date = datetime.now() - timedelta(days=max_age_days)
 
-            company = session.query(Company).filter(
+            company = session.query(Company).options(
+                joinedload(Company.team_members)
+            ).filter(
                 and_(
                     Company.name == name,
                     Company.enriched_at >= cutoff_date
