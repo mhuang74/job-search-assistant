@@ -18,8 +18,8 @@ class CompanyProfile:
 
     # Employee data
     total_employees: Optional[int] = None
-    taiwan_employee_count: int = 0
-    taiwan_employees: List[dict] = field(default_factory=list)
+    taiwan_employee_count: int = 0  # Asia employee count (Taiwan, China, Singapore, Hong Kong)
+    taiwan_employees: List[dict] = field(default_factory=list)  # Asia employees
 
     # Metadata
     enriched_at: Optional[datetime] = None

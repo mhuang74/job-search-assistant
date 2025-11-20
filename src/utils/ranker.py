@@ -10,7 +10,7 @@ from ..models import EnrichedJob
 @dataclass
 class RankingConfig:
     """Configuration for job ranking"""
-    taiwan_team_weight: float = 10.0
+    taiwan_team_weight: float = 10.0  # Weight for Asia team presence
     same_city_weight: float = 5.0
     industry_match_weight: float = 3.0
     company_size_match_weight: float = 3.0
@@ -19,12 +19,18 @@ class RankingConfig:
     target_industries: List[str] = None
     target_company_sizes: List[str] = None
     preferred_cities: List[str] = None
-    min_taiwan_team: int = 1
+    min_taiwan_team: int = 1  # Minimum Asia team members (Taiwan, China, Singapore, Hong Kong)
 
     def __post_init__(self):
         self.target_industries = self.target_industries or []
         self.target_company_sizes = self.target_company_sizes or []
-        self.preferred_cities = self.preferred_cities or ['Taipei', 'Hsinchu', 'Taichung']
+        # Default preferred cities across Taiwan, China, Singapore, Hong Kong
+        self.preferred_cities = self.preferred_cities or [
+            'Taipei', 'Hsinchu', 'Taichung',  # Taiwan
+            'Beijing', 'Shanghai', 'Shenzhen', 'Hangzhou',  # China
+            'Singapore',  # Singapore
+            'Hong Kong'  # Hong Kong
+        ]
 
 
 class JobRanker:
@@ -45,9 +51,9 @@ class JobRanker:
         """
         score = 0.0
 
-        # Critical: Taiwan team presence (0-50 points)
-        taiwan_count = job.taiwan_team_count or 0
-        score += min(taiwan_count * self.config.taiwan_team_weight, 50)
+        # Critical: Asia team presence (0-50 points)
+        asia_count = job.taiwan_team_count or 0  # Field name kept for compatibility
+        score += min(asia_count * self.config.taiwan_team_weight, 50)
 
         # Proximity bonus (0-20 points)
         if self.config.preferred_cities and job.taiwan_team_members:
@@ -86,7 +92,7 @@ class JobRanker:
         Returns:
             Sorted list of jobs with ranking_score set
         """
-        # Filter by minimum Taiwan team requirement
+        # Filter by minimum Asia team requirement
         filtered_jobs = [
             job for job in jobs
             if (job.taiwan_team_count or 0) >= self.config.min_taiwan_team

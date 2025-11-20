@@ -17,9 +17,9 @@ class EnrichmentService:
 
     Features:
     - Automatic company matching
-    - Taiwan team member identification
+    - Asia team member identification (Taiwan, China, Singapore, Hong Kong)
     - Caching to minimize API costs
-    - Ranking based on Taiwan team presence
+    - Ranking based on Asia team presence
     """
 
     def __init__(
@@ -131,7 +131,7 @@ class EnrichmentService:
 
                     logger.info(
                         f"Enriched: {job.company} - "
-                        f"{company_profile.taiwan_employee_count} Taiwan team members"
+                        f"{company_profile.taiwan_employee_count} Asia team members"
                     )
                 else:
                     # Company not found, add without enrichment
@@ -173,14 +173,14 @@ class EnrichmentService:
         company_website: Optional[str] = None
     ) -> Optional[CompanyProfile]:
         """
-        Get company profile with Taiwan team members
+        Get company profile with Asia team members (Taiwan, China, Singapore, Hong Kong)
 
         Args:
             company_name: Company name
             company_website: Company website/domain (optional)
 
         Returns:
-            CompanyProfile with Taiwan employee data
+            CompanyProfile with Asia employee data
         """
         # Get company profile
         if self.service == "coresignal":
@@ -196,20 +196,20 @@ class EnrichmentService:
         if not company_profile:
             return None
 
-        # Get Taiwan employees
+        # Get Asia employees (Taiwan, China, Singapore, Hong Kong)
         if self.service == "peopledatalabs":
-            taiwan_employees = await self.enricher.search_employees_in_taiwan(company_name)
+            asia_employees = await self.enricher.search_employees_in_asia(company_name)
         elif self.service == "coresignal":
             # Coresignal employee search requires company website
-            taiwan_employees = await self.enricher.get_employees_in_taiwan(
+            asia_employees = await self.enricher.get_employees_in_asia(
                 company_profile.website
             )
         else:
-            taiwan_employees = []
+            asia_employees = []
 
-        # Update company profile with Taiwan data
-        company_profile.taiwan_employee_count = len(taiwan_employees)
-        company_profile.taiwan_employees = taiwan_employees
+        # Update company profile with Asia data
+        company_profile.taiwan_employee_count = len(asia_employees)  # Field name kept for compatibility
+        company_profile.taiwan_employees = asia_employees  # Field name kept for compatibility
         company_profile.enriched_at = datetime.now()
 
         return company_profile

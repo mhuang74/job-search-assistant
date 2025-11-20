@@ -69,8 +69,8 @@ class EnrichedJob:
     company_size: Optional[str] = None
     industry: Optional[str] = None
     headquarters_location: Optional[str] = None
-    taiwan_team_count: int = 0
-    taiwan_team_members: List[dict] = field(default_factory=list)
+    taiwan_team_count: int = 0  # Asia team count (Taiwan, China, Singapore, Hong Kong)
+    taiwan_team_members: List[dict] = field(default_factory=list)  # Asia team members
     enriched_at: Optional[datetime] = None
     ranking_score: float = 0.0
 
