@@ -94,30 +94,35 @@ class PeopleDataLabsEnricher:
             logger.error(f"Error fetching company profile: {e}")
             return None
 
-    async def search_employees_in_taiwan(
+    async def search_employees_in_asia(
         self,
         company_name: str,
-        max_results: int = 100
+        max_results: int = 100,
+        countries: List[str] = None
     ) -> List[Dict]:
         """
-        Search for employees in Taiwan for a company
+        Search for employees in Asia for a company
 
         Args:
             company_name: Company name
             max_results: Maximum number of employees to return
+            countries: List of countries to search (defaults to Taiwan, China, Singapore, Hong Kong)
 
         Returns:
             List of employee dictionaries
 
         Cost: $0.28 per successful match
         """
+        if countries is None:
+            countries = ['taiwan', 'china', 'singapore', 'hong kong']
+
         try:
-            # Build search query
+            # Build search query with multiple countries
             query = {
                 'query': {
                     'bool': {
                         'must': [
-                            {'term': {'location_country': 'taiwan'}},
+                            {'terms': {'location_country': countries}},
                             {'term': {'job_company_name': company_name}}
                         ]
                     }
@@ -143,14 +148,14 @@ class PeopleDataLabsEnricher:
                             'title': person.get('job_title'),
                             'location': person.get('location_name'),
                             'city': person.get('location_locality'),
-                            'country': 'Taiwan',
+                            'country': person.get('location_country', '').title(),
                             'linkedin_url': person.get('linkedin_url')
                         })
 
-                    logger.info(f"Found {len(employees)} Taiwan employees for {company_name}")
+                    logger.info(f"Found {len(employees)} Asia employees for {company_name}")
                     return employees
                 else:
-                    logger.warning(f"No employees found for {company_name} in Taiwan")
+                    logger.warning(f"No employees found for {company_name} in target countries")
                     return []
 
             else:

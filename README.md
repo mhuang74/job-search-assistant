@@ -1,8 +1,8 @@
 # Job Search Assistant
 
-> Leverage job board scraping and LinkedIn data to identify and rank remote jobs based on Taiwan team presence
+> Leverage job board scraping and LinkedIn data to identify and rank remote jobs based on Asia team presence
 
-Find remote jobs at companies with team members in Taiwan using automated scraping and LinkedIn enrichment.
+Find remote jobs at companies with team members in Asia (Taiwan, China, Singapore, Hong Kong) using automated scraping and LinkedIn enrichment.
 
 ## 🚀 Status: Phases 1 & 2 Implemented
 
@@ -35,7 +35,7 @@ python main.py search "senior software engineer" --max-results 50
 # Enrich with LinkedIn data (requires API key)
 python main.py enrich --service peopledatalabs --max-jobs 20
 
-# List enriched jobs with Taiwan teams
+# List enriched jobs with Asia teams
 python main.py list --min-taiwan-team 1 --enriched-only
 ```
 
@@ -50,7 +50,7 @@ python main.py list --min-taiwan-team 1 --enriched-only
 
 ### Phase 2: LinkedIn Enrichment ✅
 - Company profile enrichment
-- Taiwan team member identification
+- Asia team member identification (Taiwan, China, Singapore, Hong Kong)
 - Intelligent caching (70-90% cost savings)
 - Multi-factor ranking algorithm
 - Support for People Data Labs & Coresignal APIs

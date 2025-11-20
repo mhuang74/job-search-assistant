@@ -116,26 +116,31 @@ class CoresignalEnricher:
             logger.error(f"Error fetching company profile for {company_name}: {e}")
             return None
 
-    async def get_employees_in_taiwan(
+    async def get_employees_in_asia(
         self,
         company_website: str,
-        max_results: int = 100
+        max_results: int = 100,
+        countries: List[str] = None
     ) -> List[Dict]:
         """
-        Get employees in Taiwan from Coresignal using ES DSL query
+        Get employees in Asia from Coresignal using ES DSL query
 
         Args:
             company_website: Company website domain
             max_results: Maximum number of employees to return
+            countries: List of countries to search (defaults to Taiwan, China, Singapore, Hong Kong)
 
         Returns:
             List of employee dictionaries
         """
+        if countries is None:
+            countries = ["Taiwan", "China", "Singapore", "Hong Kong"]
+
         try:
             # Use employee_clean ES DSL endpoint
             url = f"{self.base_url}/employee_clean/search/es_dsl"
 
-            # Elasticsearch DSL query to find employees by company website in Taiwan
+            # Elasticsearch DSL query to find employees by company website in target countries
             payload = {
                 "query": {
                     "bool": {
@@ -151,8 +156,8 @@ class CoresignalEnricher:
                                 }
                             },
                             {
-                                "match": {
-                                    "country": "Taiwan"
+                                "terms": {
+                                    "country": countries
                                 }
                             }
                         ]
@@ -185,12 +190,14 @@ class CoresignalEnricher:
                         'name': emp.get('name'),
                         'title': emp.get('title'),
                         'location': emp.get('location'),
-                        'city': self._extract_city(emp.get('location')),
-                        'country': 'Taiwan',
+                        'city': self._extract_city(emp.get('location'), emp.get('country')),
+                        'country': emp.get('country'),
                         'linkedin_url': emp.get('url')
                     })
 
-                logger.info(f"Found {len(employees)} Taiwan employees for company {company_website}")
+
+                logger.info(f"Found {len(employees)} Asia employees for company {company_website}")
+
                 return employees
 
             else:
@@ -201,16 +208,29 @@ class CoresignalEnricher:
             logger.error(f"Error searching employees: {e}")
             return []
 
-    def _extract_city(self, location: Optional[str]) -> Optional[str]:
+    def _extract_city(self, location: Optional[str], country: Optional[str] = None) -> Optional[str]:
         """Extract city from location string"""
         if not location:
             return None
 
-        # Common Taiwan cities
-        cities = ['Taipei', 'Hsinchu', 'Taichung', 'Tainan', 'Kaohsiung']
+        # Common cities in target countries
+        cities = {
+            'Taiwan': ['Taipei', 'Hsinchu', 'Taichung', 'Tainan', 'Kaohsiung'],
+            'China': ['Beijing', 'Shanghai', 'Shenzhen', 'Guangzhou', 'Hangzhou', 'Chengdu'],
+            'Singapore': ['Singapore'],
+            'Hong Kong': ['Hong Kong']
+        }
 
-        for city in cities:
-            if city.lower() in location.lower():
-                return city
+        # If country is specified, only check cities in that country
+        if country and country in cities:
+            for city in cities[country]:
+                if city.lower() in location.lower():
+                    return city
+        else:
+            # Check all cities
+            for city_list in cities.values():
+                for city in city_list:
+                    if city.lower() in location.lower():
+                        return city
 
         return None

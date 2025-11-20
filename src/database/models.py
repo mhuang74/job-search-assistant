@@ -41,7 +41,7 @@ class Job(Base):
     company_size = Column(String(50))
     industry = Column(String(100))
     headquarters_location = Column(String(200))
-    taiwan_team_count = Column(Integer, default=0)
+    taiwan_team_count = Column(Integer, default=0)  # Asia team count (Taiwan, China, Singapore, Hong Kong)
     enriched_at = Column(DateTime)
     ranking_score = Column(Float, default=0.0)
 
@@ -66,7 +66,7 @@ class Company(Base):
     description = Column(Text)
 
     total_employees = Column(Integer)
-    taiwan_employee_count = Column(Integer, default=0)
+    taiwan_employee_count = Column(Integer, default=0)  # Asia employee count (Taiwan, China, Singapore, Hong Kong)
 
     enriched_at = Column(DateTime)
     source = Column(String(50))  # peopledatalabs, coresignal
@@ -80,7 +80,7 @@ class Company(Base):
 
 
 class TeamMember(Base):
-    """Team member table (Taiwan employees)"""
+    """Team member table (employees in target Asia countries: Taiwan, China, Singapore, Hong Kong)"""
     __tablename__ = 'team_members'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
