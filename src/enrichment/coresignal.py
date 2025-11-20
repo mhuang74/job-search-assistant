@@ -12,17 +12,25 @@ from ..models import CompanyProfile
 class CoresignalEnricher:
     """Coresignal API for LinkedIn enrichment"""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, proxy: Optional[str] = None):
         """
         Initialize Coresignal client
 
         Args:
             api_key: Coresignal API key
+            proxy: Optional HTTP/HTTPS proxy URL (e.g., http://user:pass@host:port)
         """
         self.api_key = api_key
         # Updated to v2 API with multi-source endpoint
         self.base_url = "https://api.coresignal.com/cdapi/v2"
-        self.client = httpx.AsyncClient(timeout=30.0)
+
+        # Configure httpx client with optional proxy
+        client_kwargs = {"timeout": 30.0}
+        if proxy:
+            client_kwargs["proxies"] = proxy
+            logger.info(f"Coresignal client configured with proxy")
+
+        self.client = httpx.AsyncClient(**client_kwargs)
 
     async def __aenter__(self):
         return self

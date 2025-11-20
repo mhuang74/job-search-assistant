@@ -26,7 +26,8 @@ class EnrichmentService:
         self,
         service: str = "peopledatalabs",
         api_key: Optional[str] = None,
-        cache_days: int = 30
+        cache_days: int = 30,
+        proxy: Optional[str] = None
     ):
         """
         Initialize enrichment service
@@ -35,22 +36,26 @@ class EnrichmentService:
             service: "peopledatalabs" or "coresignal"
             api_key: API key for the service
             cache_days: Number of days to cache company data
+            proxy: Optional HTTP/HTTPS proxy URL
         """
         self.service = service
         self.cache_days = cache_days
         self.storage = JobStorage(os.getenv('DATABASE_URL', 'sqlite:///jobs.db'))
+
+        # Get proxy from parameter or environment variable
+        proxy_url = proxy or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
 
         # Initialize API client
         if service == "peopledatalabs":
             self.api_key = api_key or os.getenv('PEOPLEDATALABS_API_KEY')
             if not self.api_key:
                 raise ValueError("PEOPLEDATALABS_API_KEY not set")
-            self.enricher = PeopleDataLabsEnricher(self.api_key)
+            self.enricher = PeopleDataLabsEnricher(self.api_key, proxy=proxy_url)
         elif service == "coresignal":
             self.api_key = api_key or os.getenv('CORESIGNAL_API_KEY')
             if not self.api_key:
                 raise ValueError("CORESIGNAL_API_KEY not set")
-            self.enricher = CoresignalEnricher(self.api_key)
+            self.enricher = CoresignalEnricher(self.api_key, proxy=proxy_url)
         else:
             raise ValueError(f"Unknown service: {service}")
 
