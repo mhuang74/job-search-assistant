@@ -195,7 +195,9 @@ class CoresignalEnricher:
                         'linkedin_url': emp.get('url')
                     })
 
-                logger.info(f"Found {len(employees)} Asia employees for company website {company_website}")
+
+                logger.info(f"Found {len(employees)} Asia employees for company {company_website}")
+
                 return employees
 
             else:
