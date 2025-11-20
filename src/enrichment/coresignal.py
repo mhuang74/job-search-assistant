@@ -157,12 +157,14 @@ class CoresignalEnricher:
                             }
                         ]
                     }
-                },
-                "size": max_results
+                }
             }
 
             logger.debug(f"Coresignal employee search - URL: {url}")
             logger.debug(f"Coresignal employee search - Payload: {payload}")
+
+            # Add limit as query parameter instead of in body
+            params = {'limit': max_results}
 
             response = await self.client.post(
                 url,
@@ -170,6 +172,7 @@ class CoresignalEnricher:
                     'apikey': self.api_key,
                     'Content-Type': 'application/json'
                 },
+                params=params,
                 json=payload
             )
 

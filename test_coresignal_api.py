@@ -91,12 +91,13 @@ async def test_coresignal_api():
                                     }
                                 ]
                             }
-                        },
-                        "size": 10
+                        }
                     }
+                    emp_params = {'limit': 10}
 
                     print(f"URL: {emp_url}")
                     print(f"Payload: {emp_payload}")
+                    print(f"Params: {emp_params}")
                     print()
 
                     emp_response = await client.post(
@@ -105,6 +106,7 @@ async def test_coresignal_api():
                             'apikey': api_key,
                             'Content-Type': 'application/json'
                         },
+                        params=emp_params,
                         json=emp_payload
                     )
 
