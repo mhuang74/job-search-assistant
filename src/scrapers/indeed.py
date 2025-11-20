@@ -1,5 +1,6 @@
 """Indeed job board scraper"""
 import asyncio
+import os
 import random
 import re
 from datetime import datetime, timedelta
@@ -56,21 +57,48 @@ class IndeedScraper(BaseScraper):
             timezone_id = self.config.get('timezone_id', 'Asia/Taipei')
             locale = self.config.get('locale', 'en-US')  # Keep en-US since accessing Indeed.com
 
+            # Get proxy configuration from config or environment
+            proxy_url = self.config.get('proxy') or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
+
+            # Parse proxy configuration for Playwright
+            proxy_config = None
+            if proxy_url:
+                # Playwright expects proxy in format: {'server': 'http://host:port', 'username': '...', 'password': '...'}
+                try:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(proxy_url)
+                    proxy_config = {'server': f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
+                    if parsed.username:
+                        proxy_config['username'] = parsed.username
+                    if parsed.password:
+                        proxy_config['password'] = parsed.password
+                    logger.info(f"Browser configured with proxy: {parsed.scheme}://{parsed.hostname}:{parsed.port}")
+                except Exception as e:
+                    logger.warning(f"Failed to parse proxy URL '{proxy_url}': {e}")
+                    proxy_config = None
+
             # Randomize screen size to avoid fingerprinting
             screen = random.choice(SCREEN_SIZES)
             logger.info(f"Initializing browser ({browser_type}, headless={headless}, timezone={timezone_id}, screen={screen['width']}x{screen['height']})...")
+
+            # Prepare browser launch kwargs
+            launch_kwargs = {
+                'headless': headless,
+            }
+            if proxy_config:
+                launch_kwargs['proxy'] = proxy_config
 
             # Launch browser based on type
             if browser_type == 'firefox':
                 # Firefox is often less detectable
                 self.browser = await self.playwright.firefox.launch(
-                    headless=headless,
+                    **launch_kwargs,
                     args=[]  # Firefox doesn't need as many stealth args
                 )
             else:
                 # Chromium with stealth args
                 self.browser = await self.playwright.chromium.launch(
-                    headless=headless,
+                    **launch_kwargs,
                     args=[
                         '--disable-blink-features=AutomationControlled',
                         '--no-sandbox',
