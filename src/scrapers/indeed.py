@@ -411,18 +411,51 @@ class IndeedScraper(BaseScraper):
 
                 return []
 
-            jobs = []
+            # Parse job cards
+            job_data_list = []
             for card in job_cards:
                 try:
-                    job = self._parse_job_card(card)
-                    if job:
-                        jobs.append(job)
+                    job_data = self._parse_job_card(card)
+                    if job_data:
+                        job_data_list.append(job_data)
                 except Exception as e:
                     logger.warning(f"Failed to parse job card: {e}")
                     logger.debug(f"Card HTML: {str(card)[:200]}")
                     continue
 
-            logger.info(f"✅ Successfully parsed {len(jobs)} jobs from page {page_num}")
+            logger.info(f"✅ Successfully parsed {len(job_data_list)} jobs from page {page_num}")
+
+            # Extract company websites for jobs with company URLs
+            # Use a set to track companies we've already fetched to avoid duplicates
+            fetched_companies = {}
+            jobs = []
+
+            for job_data in job_data_list:
+                job_listing = job_data['job_listing']
+                company_url = job_data['company_url']
+
+                # Try to fetch company website if we have a company URL
+                if company_url:
+                    # Check if we already fetched this company
+                    if company_url in fetched_companies:
+                        company_website = fetched_companies[company_url]
+                        logger.debug(f"Using cached company website for {job_listing.company}")
+                    else:
+                        # Fetch company website
+                        logger.info(f"Fetching company website for: {job_listing.company}")
+                        company_website = await self._extract_company_website(page, company_url)
+                        fetched_companies[company_url] = company_website
+
+                        # Add small delay between company page fetches to avoid detection
+                        await self._random_delay(1, 2)
+
+                    # Update job listing with company website
+                    if company_website:
+                        job_listing.company_website = company_website
+                        logger.info(f"✅ Found website for {job_listing.company}: {company_website}")
+
+                jobs.append(job_listing)
+
             return jobs
 
         except Exception as e:
@@ -443,8 +476,8 @@ class IndeedScraper(BaseScraper):
             if page:
                 await page.close()
 
-    def _parse_job_card(self, card) -> Optional[JobListing]:
-        """Parse a single job card"""
+    def _parse_job_card(self, card) -> Optional[dict]:
+        """Parse a single job card and return dict with job data and company URL"""
         try:
             # Extract title and URL
             title_elem = card.find('h2', class_='jobTitle')
@@ -459,9 +492,28 @@ class IndeedScraper(BaseScraper):
             job_key = title_link.get('data-jk') or title_link.get('id', '').replace('job_', '')
             url = f"{self.base_url}/viewjob?jk={job_key}" if job_key else ""
 
-            # Extract company
+            # Extract company and company URL
             company_elem = card.find('span', {'data-testid': 'company-name'})
             company = company_elem.get_text(strip=True) if company_elem else "Unknown"
+
+            # Try to find company link - it might be in the parent or a sibling element
+            company_url = None
+            if company_elem:
+                # Look for a link in the parent hierarchy
+                company_link = company_elem.find_parent('a')
+                if not company_link:
+                    # Sometimes the link is a sibling or nearby element
+                    company_container = company_elem.find_parent('div')
+                    if company_container:
+                        company_link = company_container.find('a', href=re.compile(r'/cmp/'))
+
+                if company_link and company_link.get('href'):
+                    href = company_link.get('href')
+                    # Ensure it's a full URL
+                    if href.startswith('/'):
+                        company_url = f"{self.base_url}{href}"
+                    else:
+                        company_url = href
 
             # Extract location
             location_elem = card.find('div', {'data-testid': 'text-location'})
@@ -479,21 +531,131 @@ class IndeedScraper(BaseScraper):
             salary_elem = card.find('div', class_=re.compile(r'salary-snippet'))
             salary_text = salary_elem.get_text(strip=True) if salary_elem else None
 
-            return JobListing(
-                id=job_key or None,
-                title=title,
-                company=company,
-                location=location,
-                description=description,
-                url=url,
-                posted_date=posted_date,
-                board_source=JobBoard.INDEED,
-                remote_type="Remote" if "remote" in location.lower() else None,
-                scraped_at=datetime.now()
-            )
+            return {
+                'job_listing': JobListing(
+                    id=job_key or None,
+                    title=title,
+                    company=company,
+                    location=location,
+                    description=description,
+                    url=url,
+                    posted_date=posted_date,
+                    board_source=JobBoard.INDEED,
+                    remote_type="Remote" if "remote" in location.lower() else None,
+                    scraped_at=datetime.now()
+                ),
+                'company_url': company_url
+            }
 
         except Exception as e:
             logger.warning(f"Error parsing job card: {e}")
+            return None
+
+    async def _extract_company_website(self, page: Page, company_url: str) -> Optional[str]:
+        """
+        Navigate to company page and extract website URL
+
+        Args:
+            page: Playwright page object
+            company_url: URL to company page on Indeed
+
+        Returns:
+            Company website URL if found, None otherwise
+        """
+        if not company_url:
+            return None
+
+        try:
+            logger.debug(f"Fetching company website from: {company_url}")
+
+            # Navigate to company page
+            response = await page.goto(company_url, wait_until='domcontentloaded', timeout=15000)
+
+            if response.status >= 400:
+                logger.debug(f"Failed to load company page: {response.status}")
+                return None
+
+            # Wait for page to load
+            await page.wait_for_timeout(1000)
+
+            # Get page content
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+
+            # Look for the "Link" box on the About Company page
+            # Indeed typically shows company website in a div with specific patterns
+            # Try multiple selectors to find the website link
+
+            # Pattern 1: Look for a "Website" or "Link" label
+            website_candidates = []
+
+            # Find all links that might be the company website
+            for link_elem in soup.find_all('a', href=True):
+                href = link_elem.get('href', '')
+                text = link_elem.get_text(strip=True).lower()
+
+                # Check if this is labeled as website/link
+                parent_text = ''
+                if link_elem.parent:
+                    parent_text = link_elem.parent.get_text(strip=True).lower()
+
+                # Look for indicators this is the company website
+                is_website = any([
+                    'website' in text or 'website' in parent_text,
+                    'link' in parent_text and len(text) > 5,  # "Link" label with actual URL text
+                    text == 'visit website',
+                    text == 'company website',
+                ])
+
+                # Exclude Indeed internal links
+                is_external = not any([
+                    'indeed.com' in href,
+                    href.startswith('/'),
+                    href.startswith('#'),
+                    'mailto:' in href,
+                    'tel:' in href,
+                ])
+
+                if is_website and is_external:
+                    website_candidates.append(href)
+
+            # Pattern 2: Look in structured data containers
+            # Indeed may have a "Company Details" or "About" section
+            info_sections = soup.find_all(['div', 'section'], class_=re.compile(r'(company.*info|about|details)', re.I))
+            for section in info_sections:
+                links = section.find_all('a', href=True)
+                for link in links:
+                    href = link.get('href', '')
+                    if href and not any([
+                        'indeed.com' in href,
+                        href.startswith('/'),
+                        href.startswith('#'),
+                        'mailto:' in href,
+                        'tel:' in href,
+                    ]):
+                        # Check if nearby text suggests this is a website
+                        nearby_text = link.get_text(strip=True).lower()
+                        if nearby_text and len(nearby_text) > 3:
+                            website_candidates.append(href)
+
+            # Pattern 3: Look for data attributes or specific CSS classes
+            website_links = soup.find_all('a', {'data-testid': re.compile(r'(website|link|url)', re.I)})
+            for link in website_links:
+                href = link.get('href', '')
+                if href and 'indeed.com' not in href and not href.startswith('/'):
+                    website_candidates.append(href)
+
+            if website_candidates:
+                # Return the first valid candidate
+                website_url = website_candidates[0]
+                logger.debug(f"Found company website: {website_url}")
+                return website_url
+
+            logger.debug("No company website found on page")
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error extracting company website: {type(e).__name__}: {e}")
             return None
 
     def _parse_posted_date(self, date_text: str) -> datetime:
