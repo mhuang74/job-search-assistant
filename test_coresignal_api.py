@@ -21,15 +21,15 @@ async def test_coresignal_api():
     print(f"✅ API Key found: {api_key[:10]}...")
     print()
 
-    # Updated to v2 API with multi-source endpoint
+    # Updated to v2 API with clean endpoints
     base_url = "https://api.coresignal.com/cdapi/v2"
 
     # Test company enrich endpoint
-    print("Testing Company Enrich Endpoint (Multi-Source API)...")
+    print("Testing Company Enrich Endpoint (Clean API)...")
     print("-" * 50)
 
     company_website = "stripe.com"
-    url = f"{base_url}/company_multi_source/enrich"
+    url = f"{base_url}/company_clean/enrich"
     params = {'website': company_website}
 
     print(f"URL: {url}")
@@ -66,14 +66,33 @@ async def test_coresignal_api():
 
                     # Test employee search
                     print()
-                    print("Testing Employee Search Endpoint (v2 API)...")
+                    print("Testing Employee Search Endpoint (ES DSL API)...")
                     print("-" * 50)
 
-                    emp_url = f"{base_url}/employee_base/search/filter"
+                    emp_url = f"{base_url}/employee_clean/search/es_dsl"
                     emp_payload = {
-                        'company_id': company_id,
-                        'country': 'Taiwan',  # v2 uses 'country' instead of 'location'
-                        'limit': 10
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    {
+                                        "nested": {
+                                            "path": "experience",
+                                            "query": {
+                                                "match": {
+                                                    "experience.company_website.domain_only": company_website
+                                                }
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "match": {
+                                            "country": "Taiwan"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "size": 10
                     }
 
                     print(f"URL: {emp_url}")

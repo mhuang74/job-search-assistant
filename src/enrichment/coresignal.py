@@ -58,7 +58,7 @@ class CoresignalEnricher:
 
     async def get_company_profile(self, company_name: str, company_website: Optional[str] = None) -> Optional[CompanyProfile]:
         """
-        Get company data from Coresignal using multi-source enrich endpoint
+        Get company data from Coresignal using clean enrich endpoint
 
         Args:
             company_name: Company name to search
@@ -71,8 +71,8 @@ class CoresignalEnricher:
             # Use provided website or infer from company name
             website = company_website or self._infer_website(company_name)
 
-            # Use multi-source enrich endpoint (requires website parameter)
-            url = f"{self.base_url}/company_multi_source/enrich"
+            # Use company_clean enrich endpoint (requires website parameter)
+            url = f"{self.base_url}/company_clean/enrich"
             params = {'website': website}
 
             logger.debug(f"Coresignal company enrich - URL: {url}")
@@ -118,27 +118,47 @@ class CoresignalEnricher:
 
     async def get_employees_in_taiwan(
         self,
-        company_id: str,
+        company_website: str,
         max_results: int = 100
     ) -> List[Dict]:
         """
-        Get employees in Taiwan from Coresignal
+        Get employees in Taiwan from Coresignal using ES DSL query
 
         Args:
-            company_id: Coresignal company ID
+            company_website: Company website domain
             max_results: Maximum number of employees to return
 
         Returns:
             List of employee dictionaries
         """
         try:
-            # Updated to v2 endpoint (professional_network -> employee_base)
-            url = f"{self.base_url}/employee_base/search/filter"
-            # Note: v2 API uses 'country' instead of 'location' for Taiwan filtering
+            # Use employee_clean ES DSL endpoint
+            url = f"{self.base_url}/employee_clean/search/es_dsl"
+
+            # Elasticsearch DSL query to find employees by company website in Taiwan
             payload = {
-                'company_id': company_id,
-                'country': 'Taiwan',
-                'limit': max_results
+                "query": {
+                    "bool": {
+                        "must": [
+                            {
+                                "nested": {
+                                    "path": "experience",
+                                    "query": {
+                                        "match": {
+                                            "experience.company_website.domain_only": company_website
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "match": {
+                                    "country": "Taiwan"
+                                }
+                            }
+                        ]
+                    }
+                },
+                "size": max_results
             }
 
             logger.debug(f"Coresignal employee search - URL: {url}")

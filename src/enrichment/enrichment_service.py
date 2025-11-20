@@ -200,8 +200,9 @@ class EnrichmentService:
         if self.service == "peopledatalabs":
             taiwan_employees = await self.enricher.search_employees_in_taiwan(company_name)
         elif self.service == "coresignal":
+            # Coresignal employee search requires company website
             taiwan_employees = await self.enricher.get_employees_in_taiwan(
-                company_profile.id
+                company_profile.website
             )
         else:
             taiwan_employees = []
