@@ -430,19 +430,27 @@ class IndeedScraper(BaseScraper):
             fetched_companies = {}
             jobs = []
 
-            for job_data in job_data_list:
+            logger.info(f"🔗 Extracting company websites for {len(job_data_list)} job(s)...")
+
+            for idx, job_data in enumerate(job_data_list, 1):
                 job_listing = job_data['job_listing']
                 company_url = job_data['company_url']
 
+                logger.info(f"\n{'='*60}")
+                logger.info(f"Job {idx}/{len(job_data_list)}: {job_listing.title} at {job_listing.company}")
+                logger.info(f"{'='*60}")
+
                 # Try to fetch company website if we have a company URL
                 if company_url:
+                    logger.info(f"📍 Company URL found: {company_url}")
+
                     # Check if we already fetched this company
                     if company_url in fetched_companies:
                         company_website = fetched_companies[company_url]
-                        logger.debug(f"Using cached company website for {job_listing.company}")
+                        logger.info(f"💾 Using cached company website for {job_listing.company}: {company_website or 'None'}")
                     else:
                         # Fetch company website
-                        logger.info(f"Fetching company website for: {job_listing.company}")
+                        logger.info(f"🚀 Fetching company website for: {job_listing.company}")
                         company_website = await self._extract_company_website(page, company_url)
                         fetched_companies[company_url] = company_website
 
@@ -452,7 +460,11 @@ class IndeedScraper(BaseScraper):
                     # Update job listing with company website
                     if company_website:
                         job_listing.company_website = company_website
-                        logger.info(f"✅ Found website for {job_listing.company}: {company_website}")
+                        logger.info(f"✅ Website set for {job_listing.company}: {company_website}")
+                    else:
+                        logger.info(f"⚠️  No website found for {job_listing.company}")
+                else:
+                    logger.info(f"⚠️  No company URL found in job card for {job_listing.company}")
 
                 jobs.append(job_listing)
 
@@ -566,13 +578,14 @@ class IndeedScraper(BaseScraper):
             return None
 
         try:
-            logger.debug(f"Fetching company website from: {company_url}")
+            logger.info(f"🌐 Opening company page: {company_url}")
 
             # Navigate to company page
             response = await page.goto(company_url, wait_until='domcontentloaded', timeout=15000)
+            logger.info(f"   📄 Response status: {response.status}")
 
             if response.status >= 400:
-                logger.debug(f"Failed to load company page: {response.status}")
+                logger.warning(f"   ❌ Failed to load company page (status {response.status})")
                 return None
 
             # Wait for page to load
@@ -588,8 +601,10 @@ class IndeedScraper(BaseScraper):
 
             # Pattern 1: Look for a "Website" or "Link" label
             website_candidates = []
+            logger.info(f"   🔍 Searching for company website using Pattern 1 (Website/Link labels)...")
 
             # Find all links that might be the company website
+            pattern1_matches = 0
             for link_elem in soup.find_all('a', href=True):
                 href = link_elem.get('href', '')
                 text = link_elem.get_text(strip=True).lower()
@@ -618,10 +633,18 @@ class IndeedScraper(BaseScraper):
 
                 if is_website and is_external:
                     website_candidates.append(href)
+                    pattern1_matches += 1
+                    logger.info(f"   ✓ Pattern 1 match: '{text[:50]}' -> {href}")
+
+            logger.info(f"   📊 Pattern 1 found {pattern1_matches} candidate(s)")
 
             # Pattern 2: Look in structured data containers
             # Indeed may have a "Company Details" or "About" section
+            logger.info(f"   🔍 Searching for company website using Pattern 2 (Company info sections)...")
             info_sections = soup.find_all(['div', 'section'], class_=re.compile(r'(company.*info|about|details)', re.I))
+            logger.info(f"   📊 Found {len(info_sections)} company info section(s)")
+
+            pattern2_matches = 0
             for section in info_sections:
                 links = section.find_all('a', href=True)
                 for link in links:
@@ -637,25 +660,38 @@ class IndeedScraper(BaseScraper):
                         nearby_text = link.get_text(strip=True).lower()
                         if nearby_text and len(nearby_text) > 3:
                             website_candidates.append(href)
+                            pattern2_matches += 1
+                            logger.info(f"   ✓ Pattern 2 match: '{nearby_text[:50]}' -> {href}")
+
+            logger.info(f"   📊 Pattern 2 found {pattern2_matches} candidate(s)")
 
             # Pattern 3: Look for data attributes or specific CSS classes
+            logger.info(f"   🔍 Searching for company website using Pattern 3 (Data attributes)...")
             website_links = soup.find_all('a', {'data-testid': re.compile(r'(website|link|url)', re.I)})
+            pattern3_matches = 0
             for link in website_links:
                 href = link.get('href', '')
                 if href and 'indeed.com' not in href and not href.startswith('/'):
                     website_candidates.append(href)
+                    pattern3_matches += 1
+                    logger.info(f"   ✓ Pattern 3 match: data-testid -> {href}")
+
+            logger.info(f"   📊 Pattern 3 found {pattern3_matches} candidate(s)")
 
             if website_candidates:
                 # Return the first valid candidate
                 website_url = website_candidates[0]
-                logger.debug(f"Found company website: {website_url}")
+                logger.info(f"   ✅ EXTRACTED WEBSITE: {website_url}")
+                logger.info(f"   📊 Total candidates found: {len(website_candidates)}")
+                if len(website_candidates) > 1:
+                    logger.info(f"   ℹ️  Other candidates: {', '.join(website_candidates[1:3])}")
                 return website_url
 
-            logger.debug("No company website found on page")
+            logger.info("   ❌ No company website found on page")
             return None
 
         except Exception as e:
-            logger.debug(f"Error extracting company website: {type(e).__name__}: {e}")
+            logger.warning(f"   ❌ Error extracting company website: {type(e).__name__}: {e}")
             return None
 
     def _parse_posted_date(self, date_text: str) -> datetime:
