@@ -714,7 +714,31 @@ The recommended approach is a **hybrid CSS + LLM strategy** that uses fast CSS e
 
 ---
 
-**Document Version**: 1.0
+**Document Version**: 1.1
 **Created**: 2025-11-21
+**Updated**: 2025-11-21
 **Author**: Claude (Job Search Assistant)
-**Status**: Proposed
+**Status**: Implemented
+
+## Implementation Notes
+
+The following files were created/modified:
+
+- `src/scrapers/indeed_crawl4ai.py` - New Crawl4AI-based scraper (~450 lines)
+- `src/scrapers/__init__.py` - Added factory function and exports
+- `main.py` - Added `--scraper` and `--extraction-mode` CLI options
+- `requirements.txt` - Added crawl4ai dependency
+- `tests/test_indeed_crawl4ai.py` - Unit tests for new scraper
+
+### Usage Examples
+
+```bash
+# Use Crawl4AI with CSS extraction (default, fast)
+python main.py search "python developer" --scraper crawl4ai
+
+# Use hybrid extraction (CSS + LLM fallback)
+python main.py search "python developer" --scraper crawl4ai --extraction-mode hybrid
+
+# Use pure LLM extraction (highest accuracy)
+python main.py search "python developer" --scraper crawl4ai --extraction-mode llm
+```
