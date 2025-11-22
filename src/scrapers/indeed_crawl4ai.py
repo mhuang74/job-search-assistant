@@ -1,4 +1,6 @@
 """Indeed job board scraper using Crawl4AI for improved accuracy and anti-detection"""
+from __future__ import annotations
+
 import asyncio
 import json
 import os
