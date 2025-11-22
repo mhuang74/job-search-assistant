@@ -741,4 +741,31 @@ python main.py search "python developer" --scraper crawl4ai --extraction-mode hy
 
 # Use pure LLM extraction (highest accuracy)
 python main.py search "python developer" --scraper crawl4ai --extraction-mode llm
+
+# Use OpenRouter with Kimi K2 Thinking (recommended for cost-effective LLM extraction)
+export OPENROUTER_API_KEY=your_key
+python main.py search "python developer" --scraper crawl4ai --extraction-mode llm
+
+# Specify custom model
+python main.py search "python developer" --scraper crawl4ai --extraction-mode llm \
+  --llm-model openrouter/moonshot-ai/kimi-k2-thinking
 ```
+
+### Supported LLM Providers
+
+The scraper supports multiple LLM providers with automatic detection:
+
+1. **OpenRouter** (OPENROUTER_API_KEY) - Default model: Kimi K2 Thinking
+   - Cost-effective: ~$0.05-0.20 per 100 jobs
+   - Good reasoning for complex extractions
+   - Excellent for international company names
+
+2. **Anthropic** (ANTHROPIC_API_KEY) - Default model: Claude Sonnet 4
+   - Highest accuracy
+   - More expensive: ~$1.50-6.00 per 100 jobs
+
+3. **OpenAI** (OPENAI_API_KEY) - Default model: GPT-4o-mini
+   - Good balance
+   - ~$0.05-0.25 per 100 jobs
+
+See [OpenRouter Integration Guide](../docs/OPENROUTER_KIMI.md) for detailed setup.

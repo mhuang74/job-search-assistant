@@ -36,6 +36,7 @@ class IndeedCrawl4AIScraper(BaseScraper):
         # Extraction strategy configuration
         self.extraction_mode = self.config.get('extraction_mode', 'css')  # 'css', 'llm', or 'hybrid'
         self.llm_provider = self.config.get('llm_provider', 'openai/gpt-4o-mini')
+        self.llm_model = self.config.get('llm_model')  # Optional: override default model
 
         # Initialize extraction strategies
         self.css_strategy = self._create_css_strategy()
@@ -101,17 +102,32 @@ class IndeedCrawl4AIScraper(BaseScraper):
 
     def _create_llm_strategy(self) -> Optional[LLMExtractionStrategy]:
         """Create LLM-based extraction strategy for enhanced accuracy"""
-        api_key = os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+        # Check for API keys in priority order
+        api_key = (
+            os.getenv('OPENROUTER_API_KEY') or
+            os.getenv('OPENAI_API_KEY') or
+            os.getenv('ANTHROPIC_API_KEY')
+        )
 
         if not api_key:
-            logger.warning("No LLM API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY for LLM extraction.")
+            logger.warning("No LLM API key found. Set OPENROUTER_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY for LLM extraction.")
             return None
 
-        # Determine provider based on available key
-        if os.getenv('ANTHROPIC_API_KEY'):
+        # Determine provider and model based on available key and config
+        if self.llm_model:
+            # Use explicitly configured model
+            provider = self.llm_model
+            logger.info(f"[Crawl4AI] Using configured LLM model: {provider}")
+        elif os.getenv('OPENROUTER_API_KEY'):
+            # Default to Kimi K2 Thinking for OpenRouter
+            provider = "openrouter/moonshot-ai/kimi-k2-thinking"
+            logger.info("[Crawl4AI] Using OpenRouter with Kimi K2 Thinking model")
+        elif os.getenv('ANTHROPIC_API_KEY'):
             provider = "anthropic/claude-sonnet-4-20250514"
+            logger.info("[Crawl4AI] Using Anthropic Claude Sonnet 4")
         else:
             provider = self.llm_provider
+            logger.info(f"[Crawl4AI] Using OpenAI model: {provider}")
 
         schema = {
             "type": "object",
@@ -519,8 +535,21 @@ class IndeedCrawl4AIScraper(BaseScraper):
                 }
             }
 
-            api_key = os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
-            provider = "anthropic/claude-sonnet-4-20250514" if os.getenv('ANTHROPIC_API_KEY') else self.llm_provider
+            # Use same API key and provider logic as main extraction
+            api_key = (
+                os.getenv('OPENROUTER_API_KEY') or
+                os.getenv('OPENAI_API_KEY') or
+                os.getenv('ANTHROPIC_API_KEY')
+            )
+
+            if self.llm_model:
+                provider = self.llm_model
+            elif os.getenv('OPENROUTER_API_KEY'):
+                provider = "openrouter/moonshot-ai/kimi-k2-thinking"
+            elif os.getenv('ANTHROPIC_API_KEY'):
+                provider = "anthropic/claude-sonnet-4-20250514"
+            else:
+                provider = self.llm_provider
 
             company_strategy = LLMExtractionStrategy(
                 llm_config=LLMConfig(provider=provider, api_key=api_key),
