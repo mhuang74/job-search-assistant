@@ -46,7 +46,7 @@ def cli():
 @click.option('--export', type=click.Path(), help='Export to CSV file')
 @click.option('--browser', default='chromium', type=click.Choice(['chromium', 'firefox']), help='Browser type (firefox is often less detectable)')
 @click.option('--headless/--no-headless', default=True, help='Run browser in headless mode')
-@click.option('--scraper', default='playwright', type=click.Choice(['playwright', 'crawl4ai']), help='Scraper implementation (crawl4ai has better anti-detection)')
+@click.option('--scraper', default='seleniumbase', type=click.Choice(['seleniumbase', 'playwright', 'crawl4ai']), help='Scraper implementation (seleniumbase=UC mode, playwright=basic, crawl4ai=LLM)')
 @click.option('--extraction-mode', default='css', type=click.Choice(['css', 'llm', 'hybrid']), help='Crawl4AI extraction mode (llm/hybrid requires API key)')
 @click.option('--llm-model', default=None, help='Specific LLM model (e.g., openrouter/moonshot-ai/kimi-k2-thinking)')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose debug logging')
@@ -56,20 +56,25 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
 
     Example: python main.py search "software engineer" --max-results 20
 
-    For debugging Indeed blocks, try:
+    Scraper options:
+      --scraper seleniumbase  # Default: UC mode (best anti-detection)
+      --scraper playwright    # Original Playwright (basic stealth)
+      --scraper crawl4ai      # Advanced with LLM extraction
+
+    For debugging Indeed blocks:
       python main.py search "your query" --no-headless --verbose
 
-    For better anti-detection with Crawl4AI:
-      python main.py search "your query" --scraper crawl4ai
+    With SeleniumBase UC mode (default):
+      python main.py search "your query" --scraper seleniumbase
 
-    For LLM-based extraction (higher accuracy, requires API key):
-      python main.py search "your query" --scraper crawl4ai --extraction-mode hybrid
+    With Playwright:
+      python main.py search "your query" --scraper playwright
 
-    With Kimi K2 Thinking via OpenRouter:
+    With Crawl4AI LLM extraction:
       export OPENROUTER_API_KEY=your_key
       python main.py search "your query" --scraper crawl4ai --extraction-mode llm
 
-    With custom model:
+    With Kimi K2 Thinking:
       python main.py search "your query" --scraper crawl4ai --extraction-mode llm --llm-model openrouter/moonshot-ai/kimi-k2-thinking
     """
     # Configure logging level
@@ -94,7 +99,13 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
         console.print(f"[cyan]🦊 Using Firefox browser (often less detectable)[/cyan]")
 
     # Show scraper info
-    if scraper == 'crawl4ai':
+    if scraper == 'seleniumbase':
+        console.print(f"[cyan]🚀 Using SeleniumBase UC mode (disconnects driver during page loads)[/cyan]")
+        console.print(f"[dim]Best for bypassing Cloudflare's behavioral detection[/dim]")
+    elif scraper == 'playwright':
+        console.print(f"[cyan]🎭 Using Playwright scraper (basic anti-detection)[/cyan]")
+        console.print(f"[dim]Good for testing, may have issues with pagination[/dim]")
+    elif scraper == 'crawl4ai':
         if not CRAWL4AI_AVAILABLE:
             console.print("[red]Error: crawl4ai not installed. Install with: pip install crawl4ai[/red]")
             return
@@ -273,7 +284,7 @@ def cleanup(days: int):
     console.print(f"[green]Deleted {deleted} jobs older than {days} days[/green]")
 
 
-async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool, browser: str = 'chromium', headless: bool = True, scraper_type: str = 'playwright', extraction_mode: str = 'css', llm_model: Optional[str] = None):
+async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool, browser: str = 'chromium', headless: bool = True, scraper_type: str = 'seleniumbase', extraction_mode: str = 'css', llm_model: Optional[str] = None):
     """Async job search"""
     if board == 'indeed':
         config = {
@@ -284,8 +295,7 @@ async def _search_jobs(query: str, location: str, max_results: int, board: str, 
         }
 
         # Choose scraper implementation
-        use_crawl4ai = scraper_type == 'crawl4ai'
-        scraper = get_indeed_scraper(use_crawl4ai=use_crawl4ai, config=config)
+        scraper = get_indeed_scraper(scraper_type=scraper_type, config=config)
 
         async with scraper:
             jobs = await scraper.search(
