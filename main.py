@@ -16,7 +16,7 @@ from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
-from src.scrapers import IndeedScraper
+from src.scrapers import IndeedScraper, get_indeed_scraper, CRAWL4AI_AVAILABLE
 from src.database import JobStorage
 from src.utils import JobDeduplicator
 from src.models import JobBoard
@@ -46,8 +46,11 @@ def cli():
 @click.option('--export', type=click.Path(), help='Export to CSV file')
 @click.option('--browser', default='chromium', type=click.Choice(['chromium', 'firefox']), help='Browser type (firefox is often less detectable)')
 @click.option('--headless/--no-headless', default=True, help='Run browser in headless mode')
+@click.option('--scraper', default='playwright', type=click.Choice(['playwright', 'crawl4ai']), help='Scraper implementation (crawl4ai has better anti-detection)')
+@click.option('--extraction-mode', default='css', type=click.Choice(['css', 'llm', 'hybrid']), help='Crawl4AI extraction mode (llm/hybrid requires API key)')
+@click.option('--llm-model', default=None, help='Specific LLM model (e.g., openrouter/moonshot-ai/kimi-k2-thinking)')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose debug logging')
-def search(query: str, location: str, max_results: int, board: str, remote_only: bool, save: bool, export: Optional[str], browser: str, headless: bool, verbose: bool):
+def search(query: str, location: str, max_results: int, board: str, remote_only: bool, save: bool, export: Optional[str], browser: str, headless: bool, scraper: str, extraction_mode: str, llm_model: Optional[str], verbose: bool):
     """
     Search for jobs on job boards
 
@@ -55,6 +58,19 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
 
     For debugging Indeed blocks, try:
       python main.py search "your query" --no-headless --verbose
+
+    For better anti-detection with Crawl4AI:
+      python main.py search "your query" --scraper crawl4ai
+
+    For LLM-based extraction (higher accuracy, requires API key):
+      python main.py search "your query" --scraper crawl4ai --extraction-mode hybrid
+
+    With Kimi K2 Thinking via OpenRouter:
+      export OPENROUTER_API_KEY=your_key
+      python main.py search "your query" --scraper crawl4ai --extraction-mode llm
+
+    With custom model:
+      python main.py search "your query" --scraper crawl4ai --extraction-mode llm --llm-model openrouter/moonshot-ai/kimi-k2-thinking
     """
     # Configure logging level
     if verbose:
@@ -77,8 +93,31 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
     if browser == 'firefox':
         console.print(f"[cyan]🦊 Using Firefox browser (often less detectable)[/cyan]")
 
+    # Show scraper info
+    if scraper == 'crawl4ai':
+        if not CRAWL4AI_AVAILABLE:
+            console.print("[red]Error: crawl4ai not installed. Install with: pip install crawl4ai[/red]")
+            return
+        console.print(f"[cyan]🤖 Using Crawl4AI scraper (enhanced anti-detection)[/cyan]")
+        console.print(f"[dim]Extraction mode: {extraction_mode}[/dim]")
+
+        if extraction_mode in ('llm', 'hybrid'):
+            # Check which LLM provider is available
+            if os.getenv('OPENROUTER_API_KEY'):
+                model = llm_model or "moonshot-ai/kimi-k2-thinking"
+                console.print(f"[green]✓ Using OpenRouter with model: {model}[/green]")
+            elif os.getenv('ANTHROPIC_API_KEY'):
+                model = llm_model or "claude-sonnet-4-20250514"
+                console.print(f"[green]✓ Using Anthropic Claude: {model}[/green]")
+            elif os.getenv('OPENAI_API_KEY'):
+                model = llm_model or "gpt-4o-mini"
+                console.print(f"[green]✓ Using OpenAI: {model}[/green]")
+            else:
+                console.print("[yellow]⚠️  No LLM API key found. Set OPENROUTER_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY for LLM extraction.[/yellow]")
+                console.print("[dim]Available providers: OpenRouter (recommended for Kimi K2), OpenAI, Anthropic[/dim]")
+
     # Run async scraping
-    jobs = asyncio.run(_search_jobs(query, location, max_results, board, remote_only, browser, headless))
+    jobs = asyncio.run(_search_jobs(query, location, max_results, board, remote_only, browser, headless, scraper, extraction_mode, llm_model))
 
     if not jobs:
         console.print("[yellow]No jobs found.[/yellow]")
@@ -234,11 +273,21 @@ def cleanup(days: int):
     console.print(f"[green]Deleted {deleted} jobs older than {days} days[/green]")
 
 
-async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool, browser: str = 'chromium', headless: bool = True):
+async def _search_jobs(query: str, location: str, max_results: int, board: str, remote_only: bool, browser: str = 'chromium', headless: bool = True, scraper_type: str = 'playwright', extraction_mode: str = 'css', llm_model: Optional[str] = None):
     """Async job search"""
     if board == 'indeed':
-        config = {'headless': headless, 'browser': browser}
-        async with IndeedScraper(config=config) as scraper:
+        config = {
+            'headless': headless,
+            'browser': browser,
+            'extraction_mode': extraction_mode,
+            'llm_model': llm_model,
+        }
+
+        # Choose scraper implementation
+        use_crawl4ai = scraper_type == 'crawl4ai'
+        scraper = get_indeed_scraper(use_crawl4ai=use_crawl4ai, config=config)
+
+        async with scraper:
             jobs = await scraper.search(
                 query=query,
                 location=location,
