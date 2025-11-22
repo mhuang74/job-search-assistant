@@ -44,8 +44,61 @@ class IndeedScraper(BaseScraper):
         except Exception:
             return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+    def _get_stealth_chrome_args(self) -> str:
+        """
+        Get advanced Chrome arguments for stealth mode
+        These help avoid detection by anti-bot systems
+        """
+        args = [
+            # Disable automation flags
+            '--disable-blink-features=AutomationControlled',
+
+            # Disable various Chrome features that can reveal automation
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-web-security',
+
+            # Reduce bot detection surface
+            '--no-first-run',
+            '--no-service-autorun',
+            '--password-store=basic',
+            '--system-developer-mode',
+
+            # Performance optimizations
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+
+            # Disable notifications and infobars
+            '--disable-infobars',
+            '--disable-notifications',
+            '--disable-popup-blocking',
+
+            # Randomize some settings to avoid fingerprinting
+            f'--window-size={random.randint(1024, 1920)},{random.randint(768, 1080)}',
+
+            # Additional stealth options
+            '--disable-browser-side-navigation',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-hang-monitor',
+            '--disable-prompt-on-repost',
+            '--disable-sync',
+            '--enable-features=NetworkService,NetworkServiceInProcess',
+            '--force-color-profile=srgb',
+            '--hide-scrollbars',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--no-default-browser-check',
+            '--no-sandbox',
+        ]
+
+        return ','.join(args)
+
     def _init_browser(self, headless: bool = True):
-        """Initialize SeleniumBase with UC mode for anti-detection"""
+        """Initialize SeleniumBase with UC mode and advanced stealth options"""
         from seleniumbase import SB
 
         # Close existing browser if any
@@ -70,24 +123,35 @@ class IndeedScraper(BaseScraper):
                 logger.warning(f"Failed to parse proxy URL: {e}")
                 proxy_arg = None
 
-        logger.info(f"Initializing SeleniumBase UC mode (headless={headless})...")
+        logger.info(f"Initializing SeleniumBase UC mode with stealth enhancements (headless={headless})...")
 
-        # Create SB context with UC mode - returns context manager
-        # We store the context manager and enter it
+        # Randomize viewport to avoid fingerprinting
+        viewports = [
+            (1920, 1080), (1366, 768), (1440, 900), (1536, 864),
+            (1600, 900), (1280, 720), (2560, 1440)
+        ]
+        width, height = random.choice(viewports)
+
+        # Create SB context with UC mode and stealth options
         sb_kwargs = {
             'uc': True,  # Undetected Chrome mode - critical for Cloudflare bypass
             'headless': headless,
             'test': False,  # Not running as test
+            'incognito': True,  # Use incognito mode to avoid tracking
+            'do_not_track': True,  # Enable Do Not Track
+            'chromium_arg': self._get_stealth_chrome_args(),  # Additional stealth args
+            'agent': self._get_random_user_agent(),  # Random user agent
         }
 
         if proxy_arg:
             sb_kwargs['proxy'] = proxy_arg
 
-        # Store kwargs for creating new sessions
+        # Store kwargs and viewport for creating new sessions
         self._sb_kwargs = sb_kwargs
+        self._viewport = (width, height)
         self.request_count = 0
 
-        logger.info("SeleniumBase UC mode initialized")
+        logger.info(f"SeleniumBase UC mode initialized with viewport {width}x{height}")
 
     def _close_browser(self):
         """Close SeleniumBase browser"""
@@ -263,9 +327,122 @@ class IndeedScraper(BaseScraper):
         logger.info(f"Found {len(jobs)} jobs from Indeed")
         return jobs[:max_results]
 
+    def _simulate_human_behavior(self, sb):
+        """
+        Simulate realistic human browsing behavior
+        - Random scrolling patterns
+        - Random mouse movements
+        - Variable reading times
+        """
+        try:
+            # Simulate reading time at top of page
+            self._random_delay(1, 3)
+
+            # Random scrolling pattern - humans don't scroll linearly
+            scroll_positions = [
+                random.randint(200, 400),
+                random.randint(500, 800),
+                random.randint(900, 1200),
+            ]
+
+            for position in scroll_positions:
+                try:
+                    # Scroll to position with some randomness
+                    actual_position = position + random.randint(-50, 50)
+                    sb.execute_script(f"window.scrollTo({{top: {actual_position}, behavior: 'smooth'}});")
+
+                    # Variable pause - humans read at different speeds
+                    self._random_delay(0.5, 2.0)
+                except Exception:
+                    # Continue even if scrolling fails
+                    pass
+
+            # Scroll back up a bit (humans often do this)
+            if random.random() > 0.5:
+                try:
+                    sb.execute_script(f"window.scrollTo({{top: {random.randint(100, 400)}, behavior: 'smooth'}});")
+                    self._random_delay(0.5, 1.5)
+                except Exception:
+                    pass
+
+            # Random mouse movements (if not headless)
+            if not self._sb_kwargs.get('headless', True):
+                try:
+                    # Move mouse to random positions
+                    for _ in range(random.randint(2, 5)):
+                        x = random.randint(100, 800)
+                        y = random.randint(100, 600)
+                        sb.execute_script(f"""
+                            var event = new MouseEvent('mousemove', {{
+                                'view': window,
+                                'bubbles': true,
+                                'cancelable': true,
+                                'clientX': {x},
+                                'clientY': {y}
+                            }});
+                            document.dispatchEvent(event);
+                        """)
+                        time.sleep(random.uniform(0.1, 0.3))
+                except Exception:
+                    pass
+
+            logger.debug("Simulated human browsing behavior")
+
+        except Exception as e:
+            logger.debug(f"Human behavior simulation had minor issues: {e}")
+            # Don't fail the scraping if this fails
+
+    def _inject_stealth_scripts(self, sb):
+        """
+        Inject JavaScript to override common bot detection methods
+        """
+        try:
+            # Override navigator.webdriver
+            sb.execute_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+
+            # Override chrome detection
+            sb.execute_script("""
+                window.navigator.chrome = {
+                    runtime: {},
+                };
+            """)
+
+            # Override permissions query
+            sb.execute_script("""
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+            """)
+
+            # Mock plugins
+            sb.execute_script("""
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                });
+            """)
+
+            # Mock languages
+            sb.execute_script("""
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en'],
+                });
+            """)
+
+            logger.debug("Injected stealth scripts to override bot detection")
+
+        except Exception as e:
+            logger.warning(f"Failed to inject some stealth scripts: {e}")
+
     def _scrape_page_with_uc(self, sb, url: str, page_num: int) -> List[JobListing]:
         """
-        Scrape a single page using SeleniumBase UC mode
+        Scrape a single page using SeleniumBase UC mode with enhanced stealth
 
         Uses uc_open_with_reconnect to disconnect chromedriver during page load,
         making it undetectable to Cloudflare during the critical verification moment.
@@ -278,6 +455,15 @@ class IndeedScraper(BaseScraper):
             # This is the key to bypassing Cloudflare detection
             logger.info("Opening page with UC reconnect mode...")
             sb.uc_open_with_reconnect(url, reconnect_time=5)
+
+            # Inject stealth scripts after page load
+            self._inject_stealth_scripts(sb)
+
+            # Wait for page to stabilize
+            self._random_delay(2, 4)
+
+            # Simulate human behavior (scrolling, mouse movements)
+            self._simulate_human_behavior(sb)
 
             # Wait for job cards to appear
             try:
@@ -306,6 +492,9 @@ class IndeedScraper(BaseScraper):
                         logger.error("CAPTCHA requires non-headless mode. Run with --no-headless")
                         self._save_debug_html(page_source, f"captcha_page_{page_num}")
                         return []
+
+            # Additional human-like delay before extracting data
+            self._random_delay(1, 3)
 
             # Get page source
             page_source = sb.get_page_source()
