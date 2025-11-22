@@ -106,6 +106,7 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
         console.print(f"[cyan]🎭 Using Playwright scraper (basic anti-detection)[/cyan]")
         console.print(f"[dim]Good for testing, may have issues with pagination[/dim]")
     elif scraper == 'crawl4ai':
+
         if not CRAWL4AI_AVAILABLE:
             console.print("[red]Error: crawl4ai not installed. Install with: pip install crawl4ai[/red]")
             return
@@ -295,7 +296,8 @@ async def _search_jobs(query: str, location: str, max_results: int, board: str, 
         }
 
         # Choose scraper implementation
-        scraper = get_indeed_scraper(scraper_type=scraper_type, config=config)
+        use_crawl4ai = scraper_type == 'crawl4ai'
+        scraper = get_indeed_scraper(use_crawl4ai=use_crawl4ai, config=config)
 
         async with scraper:
             jobs = await scraper.search(
