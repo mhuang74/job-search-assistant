@@ -53,8 +53,8 @@ class IndeedPlaywrightScraper(BaseScraper):
             # Allow browser type override (firefox is often less detectable)
             browser_type = self.config.get('browser', 'chromium')  # 'chromium' or 'firefox'
 
-            # Allow timezone/locale override via config (defaults to Taiwan)
-            timezone_id = self.config.get('timezone_id', 'Asia/Taipei')
+            # Allow timezone/locale override via config (defaults to Los Angeles)
+            timezone_id = self.config.get('timezone_id', 'America/Los_Angeles')
             locale = self.config.get('locale', 'en-US')  # Keep en-US since accessing Indeed.com
 
             # Get proxy configuration from config or environment
@@ -113,7 +113,7 @@ class IndeedPlaywrightScraper(BaseScraper):
                 )
 
             # Create a context with anti-detection
-            # Use Taiwan timezone by default to match user's actual location
+            # Use Los Angeles timezone by default to match user's actual location
             self.context = await self.browser.new_context(
                 viewport=screen,
                 user_agent=self._get_random_user_agent(),
