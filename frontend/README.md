@@ -42,6 +42,13 @@ A distinctive Next.js frontend for the Job Search Assistant with Tailwind CSS v4
 npm install
 ```
 
+**Note:** This project uses platform-specific native binaries (lightningcss, better-sqlite3). If you're running on a different platform than where `package-lock.json` was generated, you may need to reinstall dependencies:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+```
+
 ## Running the Development Server
 
 ```bash
@@ -169,6 +176,14 @@ No environment variables needed - the app reads directly from the SQLite databas
 
 ### Database not found
 Ensure `jobs.db` exists in the parent directory (`../jobs.db` relative to frontend).
+
+### Platform-specific module errors (lightningcss, better-sqlite3)
+If you see errors like `Cannot find module '../lightningcss.darwin-arm64.node'`, this means the native binaries were installed for a different platform. Reinstall dependencies on your local machine:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+```
 
 ### Build errors
 Run `npm install` to ensure all dependencies are installed.
