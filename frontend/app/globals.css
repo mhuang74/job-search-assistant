@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+@theme {
+  /* Creative color palette - Inspired by Aurora Borealis */
+  --color-void: #0a0e1a;
+  --color-deep: #1a1f35;
+  --color-midnight: #2a3350;
+  --color-aurora-teal: #2dd4bf;
+  --color-aurora-green: #34d399;
+  --color-aurora-purple: #a78bfa;
+  --color-aurora-pink: #f472b6;
+  --color-shimmer: #fbbf24;
+  --color-frost: #e0f2fe;
+
+  /* Typography - Using distinctive fonts */
+  --font-display: 'Orbitron', -apple-system, sans-serif;
+  --font-body: 'Space Mono', 'Courier New', monospace;
+  --font-accent: 'JetBrains Mono', monospace;
+
+  /* Spacing */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+
+  /* Animations */
+  --animate-duration: 0.3s;
+  --animate-duration-slow: 0.6s;
+}
+
+@layer base {
+  * {
+    @apply border-midnight;
+  }
+
+  body {
+    @apply bg-void text-frost font-[family-name:var(--font-body)];
+    background: linear-gradient(135deg, var(--color-void) 0%, var(--color-deep) 50%, var(--color-midnight) 100%);
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-[family-name:var(--font-display)] tracking-wide;
+  }
+
+  code {
+    @apply font-[family-name:var(--font-accent)];
+  }
+}
+
+@layer utilities {
+  .glow-teal {
+    text-shadow: 0 0 10px var(--color-aurora-teal), 0 0 20px var(--color-aurora-teal);
+  }
+
+  .glow-purple {
+    text-shadow: 0 0 10px var(--color-aurora-purple), 0 0 20px var(--color-aurora-purple);
+  }
+
+  .glow-pink {
+    text-shadow: 0 0 10px var(--color-aurora-pink), 0 0 20px var(--color-aurora-pink);
+  }
+
+  .card-glow {
+    box-shadow: 0 0 20px rgba(45, 212, 191, 0.1), 0 0 40px rgba(167, 139, 250, 0.05);
+    transition: box-shadow var(--animate-duration) ease;
+  }
+
+  .card-glow:hover {
+    box-shadow: 0 0 30px rgba(45, 212, 191, 0.2), 0 0 60px rgba(167, 139, 250, 0.1);
+  }
+
+  .fade-in {
+    animation: fadeIn var(--animate-duration-slow) ease-in;
+  }
+
+  .slide-up {
+    animation: slideUp var(--animate-duration) ease-out;
+  }
+
+  .stagger-1 { animation-delay: 0.1s; }
+  .stagger-2 { animation-delay: 0.2s; }
+  .stagger-3 { animation-delay: 0.3s; }
+  .stagger-4 { animation-delay: 0.4s; }
+  .stagger-5 { animation-delay: 0.5s; }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -100% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(45, 212, 191, 0.1) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
