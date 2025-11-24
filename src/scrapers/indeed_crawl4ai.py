@@ -8,7 +8,7 @@ import random
 import re
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode, quote_plus, urlparse
 from loguru import logger
 
 from .base import BaseScraper
@@ -52,12 +52,12 @@ class IndeedCrawl4AIScraper(BaseScraper):
             "fields": [
                 {
                     "name": "title",
-                    "selector": "h2.jobTitle span, h2.jobTitle a span, a[data-jk] span",
+                    "selector": "h2.jobTitle a, h2.jobTitle span, a[data-jk]",
                     "type": "text"
                 },
                 {
                     "name": "company",
-                    "selector": "span[data-testid='company-name'], span.companyName",
+                    "selector": "span[data-testid='company-name'], span.companyName, div[data-testid='company-name']",
                     "type": "text"
                 },
                 {
@@ -67,17 +67,17 @@ class IndeedCrawl4AIScraper(BaseScraper):
                 },
                 {
                     "name": "salary",
-                    "selector": "div[class*='salary-snippet'], div[class*='salaryOnly'], div.salary-snippet-container",
+                    "selector": "div[class*='salary-snippet'], div[class*='salaryOnly'], div.salary-snippet-container, div[data-testid='attribute_snippet_testid']",
                     "type": "text"
                 },
                 {
                     "name": "description",
-                    "selector": "div.job-snippet, div[class*='job-snippet'], ul li",
+                    "selector": "div.job-snippet, div[class*='job-snippet'], ul li, div[data-testid='jobsnippet_footer']",
                     "type": "text"
                 },
                 {
                     "name": "posted_date",
-                    "selector": "span.date, span[class*='date']",
+                    "selector": "span.date, span[class*='date'], span[data-testid='myJobsStateDate']",
                     "type": "text"
                 },
                 {
@@ -121,9 +121,9 @@ class IndeedCrawl4AIScraper(BaseScraper):
             provider = self.llm_model
             logger.info(f"[Crawl4AI] Using configured LLM model: {provider}")
         elif os.getenv('OPENROUTER_API_KEY'):
-            # Default to Kimi K2 Thinking for OpenRouter
-            provider = "openrouter/moonshot-ai/kimi-k2-thinking"
-            logger.info("[Crawl4AI] Using OpenRouter with Kimi K2 Thinking model")
+            # Default to OpenAI GPT-4o Mini via OpenRouter
+            provider = "openrouter/openai/gpt-4o-mini"
+            logger.info("[Crawl4AI] Using OpenRouter with GPT-4o Mini model")
         elif os.getenv('ANTHROPIC_API_KEY'):
             provider = "anthropic/claude-sonnet-4-20250514"
             logger.info("[Crawl4AI] Using Anthropic Claude Sonnet 4")
@@ -157,9 +157,9 @@ class IndeedCrawl4AIScraper(BaseScraper):
         }
 
         try:
-            from crawl4ai.config import LLMConfig
             return LLMExtractionStrategy(
-                llm_config=LLMConfig(provider=provider, api_key=api_key),
+                provider=provider,
+                api_token=api_key,
                 schema=schema,
                 extraction_type="schema",
                 instruction="""
@@ -176,21 +176,48 @@ class IndeedCrawl4AIScraper(BaseScraper):
 
     def _get_browser_config(self) -> BrowserConfig:
         """Configure browser with anti-detection settings"""
-        proxy = self.config.get('proxy') or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
+        proxy_url = self.config.get('proxy') or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
+        
+        proxy_config = None
+        if proxy_url:
+            try:
+                # Check if it's already a dict (passed from config)
+                if isinstance(proxy_url, dict):
+                    proxy_config = proxy_url
+                else:
+                    parsed = urlparse(proxy_url)
+                    if parsed.hostname and parsed.port:
+                        proxy_config = {'server': f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
+                        if parsed.username:
+                            proxy_config['username'] = parsed.username
+                        if parsed.password:
+                            proxy_config['password'] = parsed.password
+                    else:
+                        proxy_config = proxy_url
+            except Exception as e:
+                logger.warning(f"Failed to parse proxy URL: {e}")
+                proxy_config = proxy_url
 
-        return BrowserConfig(
-            browser_type=self.config.get('browser', 'chromium'),
-            headless=self.config.get('headless', True),
-            viewport_width=self.config.get('viewport_width', 1920),
-            viewport_height=self.config.get('viewport_height', 1080),
-            proxy=proxy,
-            user_agent=self._get_random_user_agent(),
-            extra_args=[
+        # Determine if we should use proxy or proxy_config
+        browser_config_args = {
+            "browser_type": self.config.get('browser', 'chromium'),
+            "headless": self.config.get('headless', True),
+            "viewport_width": self.config.get('viewport_width', 1920),
+            "viewport_height": self.config.get('viewport_height', 1080),
+            "user_agent": self._get_random_user_agent(),
+            "extra_args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
             ]
-        )
+        }
+
+        if isinstance(proxy_config, dict):
+            browser_config_args["proxy_config"] = proxy_config
+        else:
+            browser_config_args["proxy"] = proxy_config
+
+        return BrowserConfig(**browser_config_args)
 
     def _get_crawler_config(self, use_llm: bool = False) -> CrawlerRunConfig:
         """Configure crawler run settings"""
@@ -260,62 +287,105 @@ class IndeedCrawl4AIScraper(BaseScraper):
             url = self._build_search_url(query, location, page_num, remote_only)
             logger.info(f"[Crawl4AI] Scraping page {page_num + 1}/{max_pages}: {url}")
 
-            try:
-                # Determine extraction strategy for this page
-                use_llm = self.extraction_mode == 'llm'
+            # Retry logic for page navigation
+            max_retries = 3
+            retry_count = 0
+            page_success = False
 
-                result = await self.crawler.arun(
-                    url=url,
-                    config=self._get_crawler_config(use_llm=use_llm)
-                )
+            while retry_count < max_retries:
+                try:
+                    # Determine extraction strategy for this page
+                    use_llm = self.extraction_mode == 'llm'
+                    
+                    # Add stealth headers
+                    headers = {
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Cache-Control': 'max-age=0',
+                    }
 
-                if not result.success:
-                    logger.warning(f"[Crawl4AI] Failed to fetch page: {result.error_message}")
-                    consecutive_failures += 1
-                    if consecutive_failures >= max_consecutive_failures:
-                        logger.error(f"[Crawl4AI] {max_consecutive_failures} consecutive failures, stopping")
-                        break
-                    await asyncio.sleep(5)  # Wait before retry
-                    continue
-
-                consecutive_failures = 0  # Reset on success
-
-                # Parse extraction results
-                page_jobs = self._parse_extraction_result(result.extracted_content, use_llm)
-
-                # Hybrid mode: retry with LLM if CSS extraction failed
-                if self.extraction_mode == 'hybrid' and not page_jobs and self.llm_strategy:
-                    logger.info("[Crawl4AI] CSS extraction failed, trying LLM extraction...")
+                    # Update crawler config with headers if possible, or just rely on browser config
+                    # Crawl4AI's run config doesn't directly take headers in all versions, 
+                    # but we can try to pass them if supported or rely on the browser context.
+                    # For now, we'll rely on the browser config we set up, but we can add extra args if needed.
+                    
                     result = await self.crawler.arun(
                         url=url,
-                        config=self._get_crawler_config(use_llm=True)
+                        config=self._get_crawler_config(use_llm=use_llm)
                     )
-                    if result.success:
-                        page_jobs = self._parse_extraction_result(result.extracted_content, use_llm=True)
 
-                if not page_jobs:
-                    logger.info(f"[Crawl4AI] No jobs found on page {page_num + 1}, might be end of results")
-                    # Check if we got any content at all
-                    if result.html and len(result.html) < 5000:
-                        logger.warning("[Crawl4AI] Page content very small, possible blocking")
-                    break
+                    if not result.success:
+                        logger.warning(f"[Crawl4AI] Failed to fetch page: {result.error_message}")
+                        # Check for specific navigation errors
+                        if "navigation" in str(result.error_message).lower() or "timeout" in str(result.error_message).lower():
+                             raise RuntimeError(f"Navigation failed: {result.error_message}")
+                        
+                        consecutive_failures += 1
+                        if consecutive_failures >= max_consecutive_failures:
+                            logger.error(f"[Crawl4AI] {max_consecutive_failures} consecutive failures, stopping")
+                            return jobs[:max_results]
+                        
+                        await asyncio.sleep(5)  # Wait before retry
+                        retry_count += 1
+                        continue
 
-                jobs.extend(page_jobs)
-                logger.info(f"[Crawl4AI] Found {len(page_jobs)} jobs on page {page_num + 1} (total: {len(jobs)})")
+                    consecutive_failures = 0  # Reset on success
+                    page_success = True
 
-                # Anti-detection delay between pages
-                delay = random.uniform(4, 8)
-                logger.debug(f"[Crawl4AI] Waiting {delay:.1f}s before next page...")
-                await asyncio.sleep(delay)
+                    # Parse extraction results
+                    page_jobs = self._parse_extraction_result(result.extracted_content, use_llm)
 
-                page_num += 1
+                    # Hybrid mode: retry with LLM if CSS extraction failed
+                    if self.extraction_mode == 'hybrid' and not page_jobs and self.llm_strategy:
+                        logger.info("[Crawl4AI] CSS extraction failed, trying LLM extraction...")
+                        result = await self.crawler.arun(
+                            url=url,
+                            config=self._get_crawler_config(use_llm=True)
+                        )
+                        if result.success:
+                            page_jobs = self._parse_extraction_result(result.extracted_content, use_llm=True)
 
-            except Exception as e:
-                logger.error(f"[Crawl4AI] Error scraping page {page_num + 1}: {type(e).__name__}: {e}")
-                consecutive_failures += 1
-                if consecutive_failures >= max_consecutive_failures:
-                    break
-                await asyncio.sleep(5)
+                    if not page_jobs:
+                        logger.info(f"[Crawl4AI] No jobs found on page {page_num + 1}, might be end of results")
+                        # Check if we got any content at all
+                        if result.html and len(result.html) < 5000:
+                            logger.warning("[Crawl4AI] Page content very small, possible blocking")
+                        
+                        # If we successfully loaded the page but found no jobs, it might be the end of results
+                        # OR it might be a soft block (captcha/login wall that didn't trigger a navigation error)
+                        # We'll stop for now to be safe
+                        return jobs[:max_results]
+
+                    jobs.extend(page_jobs)
+                    logger.info(f"[Crawl4AI] Found {len(page_jobs)} jobs on page {page_num + 1} (total: {len(jobs)})")
+
+                    # Anti-detection delay between pages
+                    delay = random.uniform(4, 8)
+                    logger.debug(f"[Crawl4AI] Waiting {delay:.1f}s before next page...")
+                    await asyncio.sleep(delay)
+
+                    page_num += 1
+                    break # Success, exit retry loop
+
+                except Exception as e:
+                    logger.error(f"[Crawl4AI] Error scraping page {page_num + 1} (attempt {retry_count + 1}/{max_retries}): {type(e).__name__}: {e}")
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        logger.error(f"[Crawl4AI] Failed to scrape page {page_num + 1} after {max_retries} retries")
+                        consecutive_failures += 1
+                        if consecutive_failures >= max_consecutive_failures:
+                            return jobs[:max_results]
+                    
+                    # Exponential backoff
+                    wait_time = 2 ** retry_count * 2  # 4, 8, 16 seconds
+                    await asyncio.sleep(wait_time)
 
         logger.info(f"[Crawl4AI] Search complete. Total jobs found: {len(jobs)}")
         return jobs[:max_results]
@@ -520,7 +590,6 @@ class IndeedCrawl4AIScraper(BaseScraper):
             return await self._extract_company_website_css(company_page_url)
 
         try:
-            from crawl4ai.config import LLMConfig
 
             # Create specialized extraction strategy for company pages
             company_schema = {
@@ -547,14 +616,15 @@ class IndeedCrawl4AIScraper(BaseScraper):
             if self.llm_model:
                 provider = self.llm_model
             elif os.getenv('OPENROUTER_API_KEY'):
-                provider = "openrouter/moonshot-ai/kimi-k2-thinking"
+                provider = "openrouter/openai/gpt-4o-mini"
             elif os.getenv('ANTHROPIC_API_KEY'):
                 provider = "anthropic/claude-sonnet-4-20250514"
             else:
                 provider = self.llm_provider
 
             company_strategy = LLMExtractionStrategy(
-                llm_config=LLMConfig(provider=provider, api_key=api_key),
+                provider=provider,
+                api_token=api_key,
                 schema=company_schema,
                 extraction_type="schema",
                 instruction="""
