@@ -32,15 +32,13 @@ A distinctive Next.js frontend for the Job Search Assistant with Tailwind CSS v4
 
 ## Prerequisites
 
-- Node.js 18+ or Yarn
+- Node.js 18+
 - SQLite database (`jobs.db`) in the parent directory
 
 ## Installation
 
 ```bash
 # Install dependencies
-yarn install
-# or
 npm install
 ```
 
@@ -48,8 +46,6 @@ npm install
 
 ```bash
 # Start the dev server
-yarn dev
-# or
 npm run dev
 ```
 
@@ -59,13 +55,9 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ```bash
 # Build the application
-yarn build
-# or
 npm run build
 
 # Start the production server
-yarn start
-# or
 npm start
 ```
 
@@ -179,13 +171,13 @@ No environment variables needed - the app reads directly from the SQLite databas
 Ensure `jobs.db` exists in the parent directory (`../jobs.db` relative to frontend).
 
 ### Build errors
-Run `yarn install` or `npm install` to ensure all dependencies are installed.
+Run `npm install` to ensure all dependencies are installed.
 
 ### Styling issues
 Clear `.next` cache and rebuild:
 ```bash
 rm -rf .next
-yarn dev
+npm run dev
 ```
 
 ## License
