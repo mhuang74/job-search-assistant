@@ -93,46 +93,55 @@ class IndeedKameleoScraper(BaseScraper):
                     raise Exception("No suitable fingerprints found in Kameleo")
 
                 fingerprint = fingerprints[0]
-                logger.info(f"Using fingerprint: {fingerprint.name} (ID: {fingerprint.id})")
+                # Build descriptive name from fingerprint attributes
+                fp_description = f"{fingerprint.device.type} - {fingerprint.browser.product} {fingerprint.browser.version} on {fingerprint.os.family}"
+                logger.info(f"Using fingerprint: {fp_description}")
+                logger.debug(f"Fingerprint ID: {fingerprint.id}")
 
             except Exception as e:
                 logger.error(f"❌ Failed to search fingerprints: {e}")
                 raise
 
             # Step 3: Prepare proxy configuration if provided
-            proxy_config = None
+            proxy_choice = None
             proxy_url = self.config.get('proxy') or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
 
             if proxy_url:
                 try:
                     from urllib.parse import urlparse
+                    from kameleo.local_api_client.models import ProxyChoice
                     parsed = urlparse(proxy_url)
 
                     # Create Kameleo Server object for proxy
-                    proxy_config = Server(
+                    server = Server(
                         host=parsed.hostname,
                         port=parsed.port,
                         id=parsed.username if parsed.username else None,
                         secret=parsed.password if parsed.password else None,
                     )
+
+                    # Create ProxyChoice with HTTP connection type
+                    proxy_choice = ProxyChoice(
+                        value=ProxyConnectionType.HTTP,
+                        extra=server
+                    )
                     logger.info(f"Browser configured with proxy: {parsed.hostname}:{parsed.port}")
                 except Exception as e:
                     logger.warning(f"Failed to parse proxy URL '{proxy_url}': {e}")
-                    proxy_config = None
+                    proxy_choice = None
 
             # Step 4: Create Kameleo profile
             logger.info("Creating Kameleo profile...")
             profile_name = f"Indeed Scraper - {datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
             create_profile_request = CreateProfileRequest(
-                base_profile_id=fingerprint.id,
+                fingerprint_id=fingerprint.id,
                 name=profile_name,
             )
 
             # Add proxy if configured
-            if proxy_config:
-                create_profile_request.proxy = proxy_config
-                create_profile_request.proxy_connection_type = ProxyConnectionType.HTTP_HTTPS
+            if proxy_choice:
+                create_profile_request.proxy = proxy_choice
 
             try:
                 self.kameleo_profile = await asyncio.to_thread(
