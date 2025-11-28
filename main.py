@@ -16,7 +16,7 @@ from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
-from src.scrapers import IndeedScraper, get_indeed_scraper, CRAWL4AI_AVAILABLE
+from src.scrapers import IndeedScraper, get_indeed_scraper, CRAWL4AI_AVAILABLE, KAMELEO_AVAILABLE
 from src.database import JobStorage
 from src.utils import JobDeduplicator
 from src.models import JobBoard
@@ -46,7 +46,7 @@ def cli():
 @click.option('--export', type=click.Path(), help='Export to CSV file')
 @click.option('--browser', default='chromium', type=click.Choice(['chromium', 'firefox']), help='Browser type (firefox is often less detectable)')
 @click.option('--headless/--no-headless', default=True, help='Run browser in headless mode')
-@click.option('--scraper', default='seleniumbase', type=click.Choice(['seleniumbase', 'playwright', 'crawl4ai']), help='Scraper implementation (seleniumbase=UC mode, playwright=basic, crawl4ai=LLM)')
+@click.option('--scraper', default='seleniumbase', type=click.Choice(['seleniumbase', 'playwright', 'crawl4ai', 'kameleo']), help='Scraper implementation (seleniumbase=UC mode, playwright=basic, crawl4ai=LLM, kameleo=best anti-detection)')
 @click.option('--extraction-mode', default='css', type=click.Choice(['css', 'llm', 'hybrid']), help='Crawl4AI extraction mode (llm/hybrid requires API key)')
 @click.option('--llm-model', default=None, help='Specific LLM model (e.g., openrouter/moonshot-ai/kimi-k2-thinking)')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose debug logging')
@@ -60,6 +60,7 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
       --scraper seleniumbase  # Default: UC mode (best anti-detection)
       --scraper playwright    # Original Playwright (basic stealth)
       --scraper crawl4ai      # Advanced with LLM extraction
+      --scraper kameleo       # Kameleo browser profiles (best anti-detection)
 
     For debugging Indeed blocks:
       python main.py search "your query" --no-headless --verbose
@@ -69,6 +70,9 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
 
     With Playwright:
       python main.py search "your query" --scraper playwright
+
+    With Kameleo (requires Kameleo CLI running):
+      python main.py search "your query" --scraper kameleo
 
     With Crawl4AI LLM extraction:
       export OPENROUTER_API_KEY=your_key
@@ -99,7 +103,14 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
         console.print(f"[cyan]🦊 Using Firefox browser (often less detectable)[/cyan]")
 
     # Show scraper info
-    if scraper == 'seleniumbase':
+    if scraper == 'kameleo':
+        if not KAMELEO_AVAILABLE:
+            console.print("[red]Error: Kameleo not installed. Install with: pip install kameleo.local-api-client[/red]")
+            console.print("[yellow]Also ensure Kameleo CLI is running on localhost:5050[/yellow]")
+            return
+        console.print(f"[cyan]🎭 Using Kameleo scraper (real browser fingerprints)[/cyan]")
+        console.print(f"[dim]Best anti-detection with professional browser profiles[/dim]")
+    elif scraper == 'seleniumbase':
         console.print(f"[cyan]🚀 Using SeleniumBase UC mode (disconnects driver during page loads)[/cyan]")
         console.print(f"[dim]Best for bypassing Cloudflare's behavioral detection[/dim]")
     elif scraper == 'playwright':
