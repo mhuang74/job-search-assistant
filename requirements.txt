@@ -4,13 +4,14 @@ pydantic==2.10
 pydantic-settings==2.1.0
 
 # Web scraping
-seleniumbase==4.32.0
+seleniumbase==4.44.19
 playwright==1.49
-beautifulsoup4==4.12.2
+beautifulsoup4>=4.14.2
 httpx==0.25.2
 parsel==1.8.1
 fake-useragent==1.4.0
 crawl4ai>=0.4.0
+kameleo.local-api-client==4.2.0
 
 # Data processing
 pandas==2.1.4
@@ -22,11 +23,11 @@ alembic==1.13.0
 
 # CLI
 click==8.1.7
-rich==13.7.0
+rich==14.2
 
 # Logging
 loguru==0.7.2
 
 # Testing
-pytest==7.4.3
+pytest>=7.4.3
 pytest-asyncio==0.21.1
