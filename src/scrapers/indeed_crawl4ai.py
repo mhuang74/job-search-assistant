@@ -838,11 +838,19 @@ class IndeedCrawl4AIScraper(BaseScraper):
                             continue
                         else:
                             logger.error("[Crawl4AI] Cloudflare challenge in headless mode.")
-                            logger.error("[Crawl4AI] Rotating to new browser session and proxy...")
+                            logger.error("[Crawl4AI] Skipping this page - will rotate browser/proxy and try next page.")
                             # Force browser rotation on next iteration
                             self.cloudflare_detected_count += 1
-                            # Treat as failure to trigger backoff/retry or skip
-                            raise RuntimeError("Cloudflare challenge detected in headless mode")
+                            consecutive_failures += 1
+
+                            # Skip this page by incrementing page_num before breaking
+                            page_num += 1
+
+                            # Apply Cloudflare backoff delay before continuing
+                            await self._smart_delay(page_num, cloudflare_detected=True)
+
+                            # Break out of retry loop - no point retrying Cloudflare
+                            break
 
                     if not result.success:
                         logger.warning(f"[Crawl4AI] Failed to fetch page: {result.error_message}")
