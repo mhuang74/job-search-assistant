@@ -12,7 +12,7 @@ from urllib.parse import urlencode, quote_plus, urlparse
 from loguru import logger
 
 from .base import BaseScraper
-from ..models import JobListing, JobBoard
+from ..models import JobListing, JobBoard, EnrichedJob
 
 # Crawl4AI imports
 try:
@@ -97,6 +97,36 @@ class IndeedCrawl4AIScraper(BaseScraper):
                     "selector": "a[href*='/cmp/']",
                     "type": "attribute",
                     "attribute": "href"
+                },
+                {
+                    "name": "company_url_direct",
+                    "selector": "div.job_seen_beacon, div[data-testid='job-card']",
+                    "type": "attribute",
+                    "attribute": "data-company-url"
+                },
+                {
+                    "name": "js_debug",
+                    "selector": "div.job_seen_beacon, div[data-testid='job-card']",
+                    "type": "attribute",
+                    "attribute": "data-js-debug"
+                },
+                {
+                    "name": "js_status",
+                    "selector": "div.job_seen_beacon, div[data-testid='job-card']",
+                    "type": "attribute",
+                    "attribute": "data-js-status"
+                },
+                {
+                    "name": "js_test_body",
+                    "selector": "body",
+                    "type": "attribute",
+                    "attribute": "data-js-test"
+                },
+                {
+                    "name": "debug_html",
+                    "selector": "div.job_seen_beacon, div[data-testid='job-card']",
+                    "type": "attribute",
+                    "attribute": "data-debug-html"
                 }
             ]
         }
@@ -202,9 +232,10 @@ class IndeedCrawl4AIScraper(BaseScraper):
         browser_config_args = {
             "browser_type": self.config.get('browser', 'chromium'),
             "headless": self.config.get('headless', True),
-            "viewport_width": self.config.get('viewport_width', 1920),
-            "viewport_height": self.config.get('viewport_height', 1080),
-            "user_agent": self._get_random_user_agent(),
+            "viewport_width": 1920 + random.randint(-50, 50),
+            "viewport_height": 1080 + random.randint(-50, 50),
+            # Use fixed, modern User-Agent for better consistency and trust
+            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "extra_args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -231,12 +262,105 @@ class IndeedCrawl4AIScraper(BaseScraper):
             magic=True,
             # Content handling
             wait_until="domcontentloaded",
+            # Wait for JS interaction to complete
+            # wait_for="body[data-interaction-done='true']",
+            # Fallback delay if wait_for doesn't catch it (though wait_for should take precedence)
             delay_before_return_html=2.0,
             # Caching
             cache_mode=CacheMode.BYPASS,
             # Session management
             session_id="indeed_scraper",
+            # JS Execution
+            # js_code=self._get_interaction_js() if not use_llm else None,
+            js_code=None,
         )
+
+    def _get_interaction_js(self) -> str:
+        """
+        JavaScript to click job cards and extract company profile URLs from the details panel.
+        Injects the found URL into the job card's DOM as 'data-company-url'.
+        """
+        return """
+        (async () => {
+            try {
+                console.log("[JS] Starting job card interaction sequence...");
+                document.body.setAttribute('data-js-test', 'started');
+                
+                // Wait for jobs to render
+                await new Promise(r => setTimeout(r, 3000));
+                
+                const jobs = document.querySelectorAll('div.job_seen_beacon, div[data-testid="job-card"], div.jobsearch-ResultsList > div');
+                console.log("[JS] Found " + jobs.length + " jobs");
+                
+                if (jobs.length === 0) {
+                    document.body.setAttribute('data-js-status', 'no-jobs-found');
+                }
+                
+                for (const job of jobs) {
+                    job.setAttribute('data-js-debug', 'ran');
+                    // Find the clickable title/link
+                    const titleLink = job.querySelector('h2.jobTitle a, a[data-jk], a.jcs-JobTitle');
+                    
+                    if (titleLink) {
+                    // Debug: Modify title to prove we touched it
+                    titleLink.innerText = titleLink.innerText + " [JS]";
+                    
+                    // Scroll into view to ensure clickability
+                        titleLink.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        await new Promise(r => setTimeout(r, 500));
+                        
+                        console.log("[JS] Clicking job:", titleLink.innerText);
+                        titleLink.click();
+                        
+                        // Wait for details panel to load/update
+                        // We look for the right pane container
+                        await new Promise(r => setTimeout(r, 2000));
+                        
+                        // Try to find company link in the right pane
+                    // Selectors based on common Indeed layouts
+                    const rightPane = document.querySelector('.jobsearch-RightPane, #vjs-container');
+                    if (rightPane) {
+                        const companyLink = rightPane.querySelector(
+                            'div[data-testid="company-name"] a, ' +
+                            'a[href*="/cmp/"], ' +
+                            'div[data-testid="jobsearch-CompanyProfileLink"] a, ' +
+                            '.jobsearch-CompanyInfoContainer a, ' +
+                            '.jobsearch-JobInfoHeader-companyName a'
+                        );
+                        
+                        if (companyLink) {
+                            console.log("[JS] Found company URL:", companyLink.href);
+                            job.setAttribute('data-company-url', companyLink.href);
+                        } else {
+                            console.log("[JS] No company link found in right pane");
+                            job.setAttribute('data-js-status', 'no-company-link');
+                            
+                            // Debug: Capture HTML of company info area
+                            const companyInfo = rightPane.querySelector('.jobsearch-CompanyInfoContainer, .jobsearch-JobInfoHeader-companyName, div[data-testid="company-name"]');
+                            if (companyInfo) {
+                                job.setAttribute('data-debug-html', companyInfo.innerHTML.substring(0, 1000));
+                            } else {
+                                job.setAttribute('data-debug-html', 'No company info container found');
+                            }
+                        }
+                    } else {
+                        console.log("[JS] Right pane not found");
+                        job.setAttribute('data-js-status', 'no-right-pane');
+                    }
+                } else {
+                     job.setAttribute('data-js-status', 'no-title-link');
+                }
+                }
+                console.log("[JS] Interaction sequence complete.");
+                document.body.setAttribute('data-interaction-done', 'true');
+            } catch (e) {
+                console.error("[JS] Error:", e);
+                document.body.setAttribute('data-js-error', e.message);
+                // Ensure we still mark as done so scraper doesn't hang forever
+                document.body.setAttribute('data-interaction-done', 'true');
+            }
+        })();
+        """
 
     async def __aenter__(self):
         """Initialize crawler context"""
@@ -321,6 +445,20 @@ class IndeedCrawl4AIScraper(BaseScraper):
                         config=self._get_crawler_config(use_llm=use_llm)
                     )
 
+                    # Cloudflare Detection
+                    if result.html and ("challenges.cloudflare.com" in result.html or "Verify you are human" in result.html):
+                        logger.warning(f"[Crawl4AI] Cloudflare challenge detected on page {page_num + 1}!")
+                        
+                        if not self.config.get('headless', True):
+                            logger.warning("[Crawl4AI] Headful mode detected. Waiting 30s for manual solution...")
+                            await asyncio.sleep(30)
+                            # Retry immediately after wait
+                            continue
+                        else:
+                            logger.error("[Crawl4AI] Cloudflare challenge in headless mode. Aborting this page.")
+                            # Treat as failure to trigger backoff/retry or skip
+                            raise RuntimeError("Cloudflare challenge detected in headless mode")
+
                     if not result.success:
                         logger.warning(f"[Crawl4AI] Failed to fetch page: {result.error_message}")
                         # Check for specific navigation errors
@@ -367,7 +505,7 @@ class IndeedCrawl4AIScraper(BaseScraper):
                     logger.info(f"[Crawl4AI] Found {len(page_jobs)} jobs on page {page_num + 1} (total: {len(jobs)})")
 
                     # Anti-detection delay between pages
-                    delay = random.uniform(4, 8)
+                    delay = random.uniform(5, 10)
                     logger.debug(f"[Crawl4AI] Waiting {delay:.1f}s before next page...")
                     await asyncio.sleep(delay)
 
@@ -384,11 +522,49 @@ class IndeedCrawl4AIScraper(BaseScraper):
                             return jobs[:max_results]
                     
                     # Exponential backoff
-                    wait_time = 2 ** retry_count * 2  # 4, 8, 16 seconds
+                    wait_time = 2 ** retry_count * 5  # Increased backoff: 10, 20, 40 seconds
                     await asyncio.sleep(wait_time)
 
-        logger.info(f"[Crawl4AI] Search complete. Total jobs found: {len(jobs)}")
-        return jobs[:max_results]
+        # Post-processing: Fetch company metadata for unique companies
+        # Post-processing: Fetch company metadata for unique companies
+        # unique_companies = {}
+        # for job in jobs:
+        #     if job.company_website and 'indeed.com/cmp/' in job.company_website:
+        #         unique_companies[job.company_website] = None
+
+        # logger.info(f"[Crawl4AI] extracting metadata for {len(unique_companies)} companies...")
+        
+        # for company_url in unique_companies:
+        #     try:
+        #         metadata = await self.extract_company_metadata(company_url)
+        #         unique_companies[company_url] = metadata
+        #         # Random delay between company pages
+        #         await asyncio.sleep(random.uniform(2, 5))
+        #     except Exception as e:
+        #         logger.error(f"[Crawl4AI] Failed to extract metadata for {company_url}: {e}")
+
+        # Enrich jobs with company metadata
+        enriched_jobs = []
+        for job in jobs:
+            # if job.company_website and job.company_website in unique_companies:
+            #     metadata = unique_companies[job.company_website]
+            #     if metadata:
+            #         # Create EnrichedJob
+            #         enriched_job = EnrichedJob.from_job_listing(
+            #             job,
+            #             company_size=metadata.get('company_size'),
+            #             industry=metadata.get('industry'),
+            #             headquarters_location=metadata.get('headquarters'),
+            #             company_website=metadata.get('website_url') or job.company_website # Prefer official site if found
+            #         )
+            #         enriched_jobs.append(enriched_job)
+            #     else:
+            #         enriched_jobs.append(job)
+            # else:
+            enriched_jobs.append(job)
+
+        logger.info(f"[Crawl4AI] Search complete. Total jobs found: {len(enriched_jobs)}")
+        return enriched_jobs[:max_results]
 
     def _build_search_url(
         self,
@@ -433,7 +609,10 @@ class IndeedCrawl4AIScraper(BaseScraper):
             jobs = []
             for item in items:
                 try:
+                    logger.debug(f"[Crawl4AI] Raw scraped item: {json.dumps(item, indent=2, default=str)}")
                     job = self._item_to_job_listing(item)
+                    if job:
+                        logger.debug(f"[Crawl4AI] Parsed JobListing: {job}")
                     if job and job.title:  # Only add jobs with at least a title
                         jobs.append(job)
                 except Exception as e:
@@ -475,8 +654,14 @@ class IndeedCrawl4AIScraper(BaseScraper):
         remote_type = 'Remote' if is_remote else None
 
         # Build company URL
+        # Build company URL
         company_url = item.get('company_url')
-        if company_url and not company_url.startswith('http'):
+        
+        # Prefer the direct extracted URL from JS interaction
+        company_url_direct = item.get('company_url_direct')
+        if company_url_direct:
+             company_url = company_url_direct
+        elif company_url and not company_url.startswith('http'):
             company_url = f"{self.base_url}{company_url}"
 
         return JobListing(
@@ -701,3 +886,86 @@ class IndeedCrawl4AIScraper(BaseScraper):
             logger.warning(f"[Crawl4AI] CSS extraction failed for company website: {e}")
 
         return None
+
+    async def extract_company_metadata(self, company_page_url: str) -> Dict[str, Any]:
+        """
+        Extract detailed company metadata from Indeed company profile
+        """
+        if not company_page_url:
+            return {}
+
+        logger.info(f"[Crawl4AI] Visiting company profile: {company_page_url}")
+
+        # Ensure we have LLM strategy for this
+        if not self.llm_strategy:
+            self.llm_strategy = self._create_llm_strategy()
+
+        if not self.llm_strategy:
+            logger.warning("[Crawl4AI] No LLM strategy available for company metadata extraction")
+            return {}
+
+        try:
+            company_schema = {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string"},
+                    "website_url": {
+                        "type": "string",
+                        "description": "Company's official website URL"
+                    },
+                    "industry": {"type": "string"},
+                    "company_size": {"type": "string", "description": "e.g. 1000-5000 employees"},
+                    "headquarters": {"type": "string"}
+                }
+            }
+
+            # Reuse provider logic
+            api_key = (
+                os.getenv('OPENROUTER_API_KEY') or
+                os.getenv('OPENAI_API_KEY') or
+                os.getenv('ANTHROPIC_API_KEY')
+            )
+            
+            # Determine provider
+            if self.llm_model:
+                provider = self.llm_model
+            elif os.getenv('OPENROUTER_API_KEY'):
+                provider = "openrouter/openai/gpt-4o-mini"
+            elif os.getenv('ANTHROPIC_API_KEY'):
+                provider = "anthropic/claude-sonnet-4-20250514"
+            else:
+                provider = self.llm_provider
+
+            company_strategy = LLMExtractionStrategy(
+                provider=provider,
+                api_token=api_key,
+                schema=company_schema,
+                extraction_type="schema",
+                instruction="""
+                Extract company profile information.
+                Look for:
+                - Official website URL (not indeed/linkedin)
+                - Industry (e.g. Technology, Healthcare)
+                - Company size (number of employees)
+                - Headquarters location
+                """
+            )
+
+            config = CrawlerRunConfig(
+                extraction_strategy=company_strategy,
+                magic=True,
+                wait_until="domcontentloaded",
+                delay_before_return_html=2.0,
+            )
+
+            result = await self.crawler.arun(url=company_page_url, config=config)
+
+            if result.success and result.extracted_content:
+                data = json.loads(result.extracted_content)
+                logger.info(f"[Crawl4AI] Extracted company metadata: {data}")
+                return data
+
+        except Exception as e:
+            logger.warning(f"[Crawl4AI] LLM extraction failed for company metadata: {e}")
+
+        return {}
