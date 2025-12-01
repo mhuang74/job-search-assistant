@@ -6,6 +6,7 @@ import json
 import os
 import random
 import re
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlencode, quote_plus, urlparse
@@ -22,6 +23,73 @@ try:
 except ImportError:
     CRAWL4AI_AVAILABLE = False
     logger.warning("crawl4ai not installed. Install with: pip install crawl4ai")
+
+
+class ProxyRotator:
+    """Rotate between multiple proxies with health tracking"""
+
+    def __init__(self, proxy_list: List[str]):
+        """
+        Initialize proxy rotator
+
+        Args:
+            proxy_list: List of proxy URLs (e.g., ["http://user:pass@host:port", ...])
+        """
+        self.proxies = [p for p in proxy_list if p]  # Filter out None/empty
+        self.current_idx = 0
+        self.failures = {}  # Track failed proxies
+        self.max_failures = 3
+
+        if not self.proxies:
+            logger.warning("[ProxyRotator] No proxies configured, will use direct connection")
+        else:
+            logger.info(f"[ProxyRotator] Initialized with {len(self.proxies)} proxies")
+
+    def get_next_proxy(self) -> Optional[str]:
+        """Get next working proxy with round-robin + health check"""
+        if not self.proxies:
+            return None
+
+        # Try all proxies once
+        for _ in range(len(self.proxies)):
+            proxy = self.proxies[self.current_idx]
+            self.current_idx = (self.current_idx + 1) % len(self.proxies)
+
+            # Skip recently failed proxies
+            if self.failures.get(proxy, 0) < self.max_failures:
+                # Mask password in log
+                safe_proxy = self._mask_password(proxy)
+                logger.debug(f"[ProxyRotator] Selected proxy: {safe_proxy}")
+                return proxy
+
+        # All proxies failed, reset counters and try again
+        logger.warning("[ProxyRotator] All proxies failed, resetting failure counters")
+        self.failures.clear()
+        return self.proxies[0] if self.proxies else None
+
+    def mark_failure(self, proxy: str):
+        """Mark a proxy as failed"""
+        if proxy:
+            self.failures[proxy] = self.failures.get(proxy, 0) + 1
+            safe_proxy = self._mask_password(proxy)
+            logger.warning(f"[ProxyRotator] Proxy failed ({self.failures[proxy]}/{self.max_failures}): {safe_proxy}")
+
+    def mark_success(self, proxy: str):
+        """Mark a proxy as successful (reset failure count)"""
+        if proxy and proxy in self.failures:
+            self.failures[proxy] = 0
+
+    def _mask_password(self, proxy: str) -> str:
+        """Mask password in proxy URL for safe logging"""
+        if not proxy:
+            return "None"
+        try:
+            parsed = urlparse(proxy)
+            if parsed.password:
+                return proxy.replace(parsed.password, "***")
+            return proxy
+        except:
+            return "***"
 
 
 class IndeedCrawl4AIScraper(BaseScraper):
@@ -43,6 +111,41 @@ class IndeedCrawl4AIScraper(BaseScraper):
         # Initialize extraction strategies
         self.css_strategy = self._create_css_strategy()
         self.llm_strategy = None  # Lazy init when needed
+
+        # Layer 2: Proxy Rotation
+        proxy_list = self.config.get('proxy_list', [])
+        if not proxy_list:
+            # Check for PROXY_1 and PROXY_2 environment variables
+            proxy_1 = os.getenv('PROXY_1')
+            proxy_2 = os.getenv('PROXY_2')
+            if proxy_1 or proxy_2:
+                proxy_list = [p for p in [proxy_1, proxy_2] if p]
+            else:
+                # Fallback to single proxy from env or config
+                single_proxy = self.config.get('proxy') or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
+                if single_proxy:
+                    proxy_list = [single_proxy]
+        self.proxy_rotator = ProxyRotator(proxy_list)
+        self.rotate_proxy_every = self.config.get('rotate_proxy_every', 2)  # Pages per proxy
+        self.pages_since_proxy_rotation = 0
+        self.current_proxy = None
+
+        # Layer 4: Timing Configuration
+        self.min_page_delay = self.config.get('min_page_delay', 15)
+        self.max_page_delay = self.config.get('max_page_delay', 30)
+        self.cloudflare_backoff = self.config.get('cloudflare_backoff', 120)
+        self.cloudflare_detected_count = 0
+
+        # Layer 6: Session Management
+        self.session_id = str(uuid.uuid4())[:8]
+        self.cookies_file = f"/tmp/indeed_cookies_{self.session_id}.json"
+        self.max_pages_per_session = self.config.get('max_pages_per_session', 5)
+        self.pages_scraped_in_session = 0
+
+        logger.info(f"[Crawl4AI] Initialized scraper with session ID: {self.session_id}")
+        logger.info(f"[Crawl4AI] Config: extraction_mode={self.extraction_mode}, "
+                   f"rotate_proxy_every={self.rotate_proxy_every}, "
+                   f"max_pages_per_session={self.max_pages_per_session}")
 
     def _create_css_strategy(self) -> JsonCssExtractionStrategy:
         """Create CSS-based extraction strategy for Indeed job cards"""
@@ -205,9 +308,37 @@ class IndeedCrawl4AIScraper(BaseScraper):
             return None
 
     def _get_browser_config(self) -> BrowserConfig:
-        """Configure browser with anti-detection settings"""
-        proxy_url = self.config.get('proxy') or os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY')
-        
+        """Configure browser with anti-detection settings (Layer 1: Fingerprint Randomization)"""
+
+        # Layer 1: Randomize User-Agent across common browsers/OS
+        user_agents = [
+            # Chrome on macOS
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            # Chrome on Windows
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            # Safari on macOS
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+            # Chrome on Linux
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        ]
+
+        # Layer 1: Randomize viewport from common resolutions
+        viewports = [
+            (1920, 1080),  # Full HD
+            (1366, 768),   # HD
+            (1536, 864),   # HD+
+            (2560, 1440),  # 2K
+            (1440, 900),   # MacBook Pro
+        ]
+        width, height = random.choice(viewports)
+
+        # Add small random variations to viewport
+        width += random.randint(-20, 20)
+        height += random.randint(-20, 20)
+
+        # Layer 2: Get proxy from rotator
+        proxy_url = self.current_proxy or self.proxy_rotator.get_next_proxy()
+
         proxy_config = None
         if proxy_url:
             try:
@@ -232,14 +363,15 @@ class IndeedCrawl4AIScraper(BaseScraper):
         browser_config_args = {
             "browser_type": self.config.get('browser', 'chromium'),
             "headless": self.config.get('headless', True),
-            "viewport_width": 1920 + random.randint(-50, 50),
-            "viewport_height": 1080 + random.randint(-50, 50),
-            # Use fixed, modern User-Agent for better consistency and trust
-            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "viewport_width": width,
+            "viewport_height": height,
+            "user_agent": random.choice(user_agents),
             "extra_args": [
                 "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-site-isolation-trials",
+                "--no-sandbox",
             ]
         }
 
@@ -248,11 +380,19 @@ class IndeedCrawl4AIScraper(BaseScraper):
         else:
             browser_config_args["proxy"] = proxy_config
 
+        logger.debug(f"[Crawl4AI] Browser config: viewport={width}x{height}, headless={browser_config_args['headless']}")
+
         return BrowserConfig(**browser_config_args)
 
     def _get_crawler_config(self, use_llm: bool = False) -> CrawlerRunConfig:
-        """Configure crawler run settings"""
+        """Configure crawler run settings (Layer 3: Human Behavior Simulation)"""
         strategy = self.llm_strategy if use_llm and self.llm_strategy else self.css_strategy
+
+        # Layer 3: Human behavior simulation JavaScript
+        human_behavior_js = self._get_human_behavior_js()
+
+        # Layer 6: Randomize delay
+        delay = random.uniform(1.5, 3.0)
 
         return CrawlerRunConfig(
             extraction_strategy=strategy,
@@ -260,20 +400,157 @@ class IndeedCrawl4AIScraper(BaseScraper):
             simulate_user=True,
             override_navigator=True,
             magic=True,
-            # Content handling
-            wait_until="domcontentloaded",
+            # Content handling - wait for network to be idle (more realistic)
+            wait_until="networkidle",
             # Wait for JS interaction to complete
-            # wait_for="body[data-interaction-done='true']",
-            # Fallback delay if wait_for doesn't catch it (though wait_for should take precedence)
-            delay_before_return_html=2.0,
-            # Caching
+            wait_for="body[data-interaction-done='true']",
+            # Randomized delay
+            delay_before_return_html=delay,
+            # Caching - always bypass to avoid stale data
             cache_mode=CacheMode.BYPASS,
-            # Session management
-            session_id="indeed_scraper",
-            # JS Execution
-            # js_code=self._get_interaction_js() if not use_llm else None,
-            js_code=None,
+            # Session management - unique session per scraper instance
+            session_id=f"indeed_{self.session_id}",
+            # Layer 3: Human behavior simulation
+            js_code=human_behavior_js,
         )
+
+    def _get_human_behavior_js(self) -> str:
+        """
+        Layer 3: JavaScript to simulate realistic human behavior
+        - Mouse movements
+        - Scrolling patterns
+        - Reading pauses
+        - Random interactions
+        """
+        return """
+        (async () => {
+            try {
+                console.log('[AntiDetect] Starting human behavior simulation...');
+
+                // Helper: Sleep function
+                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+                // Helper: Random number in range
+                const rand = (min, max) => Math.random() * (max - min) + min;
+
+                // 1. Simulate mouse movements
+                function simulateMouseMove() {
+                    const event = new MouseEvent('mousemove', {
+                        view: window,
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: rand(100, window.innerWidth - 100),
+                        clientY: rand(100, window.innerHeight - 100)
+                    });
+                    document.dispatchEvent(event);
+                }
+
+                // 2. Simulate realistic scrolling (like a human reading)
+                async function humanScroll() {
+                    const scrollHeight = document.documentElement.scrollHeight;
+                    const viewportHeight = window.innerHeight;
+                    const scrollSteps = 4 + Math.floor(rand(0, 4)); // 4-7 steps
+
+                    console.log(`[AntiDetect] Scrolling in ${scrollSteps} steps`);
+
+                    for (let i = 0; i < scrollSteps; i++) {
+                        // Calculate scroll position with some randomness
+                        const progress = (i + 1) / scrollSteps;
+                        const targetScroll = (scrollHeight - viewportHeight) * progress;
+                        const randomOffset = rand(-50, 50);
+
+                        window.scrollTo({
+                            top: Math.max(0, targetScroll + randomOffset),
+                            behavior: 'smooth'
+                        });
+
+                        // Random mouse movements during scroll
+                        for (let j = 0; j < 3; j++) {
+                            await sleep(rand(100, 300));
+                            simulateMouseMove();
+                        }
+
+                        // Pause to "read" (longer pauses in middle of page)
+                        const readTime = i === 0 || i === scrollSteps - 1 ?
+                            rand(500, 1000) : rand(800, 1500);
+                        await sleep(readTime);
+                    }
+
+                    // Scroll back up a bit (humans often do this)
+                    if (Math.random() < 0.3) {
+                        await sleep(rand(300, 600));
+                        window.scrollTo({
+                            top: rand(0, 300),
+                            behavior: 'smooth'
+                        });
+                    }
+                }
+
+                // 3. Simulate hover over random elements
+                async function simulateHovers() {
+                    const hoverableSelectors = [
+                        '.job_seen_beacon',
+                        'h2.jobTitle',
+                        '.companyName',
+                        'div[data-testid="job-card"]'
+                    ];
+
+                    for (const selector of hoverableSelectors) {
+                        const elements = document.querySelectorAll(selector);
+                        if (elements.length > 0) {
+                            const randomElement = elements[Math.floor(rand(0, elements.length))];
+                            if (randomElement) {
+                                const rect = randomElement.getBoundingClientRect();
+                                const event = new MouseEvent('mouseover', {
+                                    view: window,
+                                    bubbles: true,
+                                    cancelable: true,
+                                    clientX: rect.left + rect.width / 2,
+                                    clientY: rect.top + rect.height / 2
+                                });
+                                randomElement.dispatchEvent(event);
+                                await sleep(rand(200, 500));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Execute behavior sequence
+                // Initial delay (page load time)
+                await sleep(rand(800, 1500));
+
+                // Random mouse movements
+                for (let i = 0; i < 3; i++) {
+                    simulateMouseMove();
+                    await sleep(rand(100, 300));
+                }
+
+                // Scroll through page
+                await humanScroll();
+
+                // Hover over some elements
+                await simulateHovers();
+
+                // Final mouse movements
+                for (let i = 0; i < 2; i++) {
+                    simulateMouseMove();
+                    await sleep(rand(100, 200));
+                }
+
+                // Small final pause
+                await sleep(rand(500, 1000));
+
+                console.log('[AntiDetect] Human behavior simulation complete');
+                document.body.setAttribute('data-interaction-done', 'true');
+
+            } catch (e) {
+                console.error('[AntiDetect] Error in behavior simulation:', e);
+                // Still mark as done so scraper doesn't hang
+                document.body.setAttribute('data-interaction-done', 'true');
+            }
+        })();
+        """
 
     def _get_interaction_js(self) -> str:
         """
@@ -362,11 +639,93 @@ class IndeedCrawl4AIScraper(BaseScraper):
         })();
         """
 
+    async def _smart_delay(self, page_num: int, cloudflare_detected: bool = False):
+        """
+        Layer 4: Implement human-like, adaptive delays between page requests
+
+        Args:
+            page_num: Current page number (0-indexed)
+            cloudflare_detected: Whether Cloudflare challenge was detected
+        """
+        if cloudflare_detected:
+            # If we hit Cloudflare, back off significantly
+            delay = random.uniform(self.cloudflare_backoff * 0.8, self.cloudflare_backoff * 1.2)
+            logger.warning(f"[AntiDetect] Cloudflare detected, backing off for {delay:.1f}s")
+            self.cloudflare_detected_count += 1
+        elif page_num == 0:
+            # First page - shorter delay (just started browsing)
+            delay = random.uniform(2, 5)
+        elif page_num < 3:
+            # Early pages - moderate delay
+            delay = random.uniform(self.min_page_delay * 0.5, self.min_page_delay)
+        else:
+            # Later pages - longer delays (Cloudflare gets more suspicious)
+            delay = random.uniform(self.min_page_delay, self.max_page_delay)
+
+            # Add random "think time" occasionally (20% chance)
+            # Simulates user pausing to think/do something else
+            if random.random() < 0.2:
+                think_time = random.uniform(5, 15)
+                logger.info(f"[AntiDetect] Adding 'human think time': {think_time:.1f}s")
+                delay += think_time
+
+        logger.debug(f"[AntiDetect] Waiting {delay:.1f}s before next action...")
+        await asyncio.sleep(delay)
+
+    async def _should_rotate_browser(self) -> bool:
+        """
+        Layer 6: Determine if we should recreate browser session
+
+        Returns:
+            True if browser should be recreated
+        """
+        # Rotate if we've hit session limit
+        if self.pages_scraped_in_session >= self.max_pages_per_session:
+            logger.info(f"[AntiDetect] Reached session limit ({self.max_pages_per_session} pages), rotating browser...")
+            return True
+
+        # Rotate if Cloudflare has been detected multiple times
+        if self.cloudflare_detected_count >= 2:
+            logger.warning(f"[AntiDetect] Cloudflare detected {self.cloudflare_detected_count} times, rotating browser...")
+            return True
+
+        return False
+
+    async def _rotate_browser(self):
+        """
+        Layer 1 & 2: Recreate browser with new fingerprint and proxy
+
+        This helps avoid accumulated fingerprinting signals
+        """
+        logger.info("[AntiDetect] Rotating browser session...")
+
+        # Close current browser
+        if self.crawler:
+            await self.crawler.__aexit__(None, None, None)
+            self.crawler = None
+
+        # Reset counters
+        self.pages_scraped_in_session = 0
+        self.cloudflare_detected_count = 0
+
+        # Rotate proxy
+        self.current_proxy = self.proxy_rotator.get_next_proxy()
+        self.pages_since_proxy_rotation = 0
+
+        # Wait a bit before recreating (simulate closing/reopening browser)
+        await asyncio.sleep(random.uniform(3, 8))
+
+        # Reinitialize browser with new config (new user-agent, viewport, etc.)
+        self.crawler = AsyncWebCrawler(config=self._get_browser_config())
+        await self.crawler.__aenter__()
+
+        logger.info("[AntiDetect] Browser rotation complete")
+
     async def __aenter__(self):
         """Initialize crawler context"""
         self.crawler = AsyncWebCrawler(config=self._get_browser_config())
         await self.crawler.__aenter__()
-        logger.info("[Crawl4AI] Browser initialized with anti-detection measures")
+        logger.info("[Crawl4AI] Browser initialized with 6-layer anti-detection defense")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -408,6 +767,20 @@ class IndeedCrawl4AIScraper(BaseScraper):
         max_consecutive_failures = 3
 
         while len(jobs) < max_results and page_num < max_pages:
+            # Layer 6: Check if we should rotate browser session
+            if await self._should_rotate_browser():
+                await self._rotate_browser()
+
+            # Layer 2: Check if we should rotate proxy
+            if self.pages_since_proxy_rotation >= self.rotate_proxy_every:
+                old_proxy = self.current_proxy
+                self.current_proxy = self.proxy_rotator.get_next_proxy()
+                if old_proxy != self.current_proxy:
+                    logger.info(f"[AntiDetect] Rotating proxy after {self.pages_since_proxy_rotation} pages")
+                    # Need to recreate browser with new proxy
+                    await self._rotate_browser()
+                self.pages_since_proxy_rotation = 0
+
             url = self._build_search_url(query, location, page_num, remote_only)
             logger.info(f"[Crawl4AI] Scraping page {page_num + 1}/{max_pages}: {url}")
 
@@ -415,6 +788,7 @@ class IndeedCrawl4AIScraper(BaseScraper):
             max_retries = 3
             retry_count = 0
             page_success = False
+            cloudflare_detected_this_page = False
 
             while retry_count < max_retries:
                 try:
@@ -445,17 +819,28 @@ class IndeedCrawl4AIScraper(BaseScraper):
                         config=self._get_crawler_config(use_llm=use_llm)
                     )
 
-                    # Cloudflare Detection
-                    if result.html and ("challenges.cloudflare.com" in result.html or "Verify you are human" in result.html):
-                        logger.warning(f"[Crawl4AI] Cloudflare challenge detected on page {page_num + 1}!")
-                        
+                    # Layer 5: Enhanced Cloudflare Detection
+                    if result.html and ("challenges.cloudflare.com" in result.html or
+                                       "Verify you are human" in result.html or
+                                       "Just a moment" in result.html or
+                                       "cf-challenge" in result.html):
+                        cloudflare_detected_this_page = True
+                        logger.warning(f"[Crawl4AI] ⚠️  Cloudflare Turnstile challenge detected on page {page_num + 1}!")
+
+                        # Mark current proxy as potentially problematic
+                        if self.current_proxy:
+                            self.proxy_rotator.mark_failure(self.current_proxy)
+
                         if not self.config.get('headless', True):
                             logger.warning("[Crawl4AI] Headful mode detected. Waiting 30s for manual solution...")
                             await asyncio.sleep(30)
                             # Retry immediately after wait
                             continue
                         else:
-                            logger.error("[Crawl4AI] Cloudflare challenge in headless mode. Aborting this page.")
+                            logger.error("[Crawl4AI] Cloudflare challenge in headless mode.")
+                            logger.error("[Crawl4AI] Rotating to new browser session and proxy...")
+                            # Force browser rotation on next iteration
+                            self.cloudflare_detected_count += 1
                             # Treat as failure to trigger backoff/retry or skip
                             raise RuntimeError("Cloudflare challenge detected in headless mode")
 
@@ -504,10 +889,14 @@ class IndeedCrawl4AIScraper(BaseScraper):
                     jobs.extend(page_jobs)
                     logger.info(f"[Crawl4AI] Found {len(page_jobs)} jobs on page {page_num + 1} (total: {len(jobs)})")
 
-                    # Anti-detection delay between pages
-                    delay = random.uniform(5, 10)
-                    logger.debug(f"[Crawl4AI] Waiting {delay:.1f}s before next page...")
-                    await asyncio.sleep(delay)
+                    # Layer 2 & 6: Mark proxy as successful and increment counters
+                    if self.current_proxy:
+                        self.proxy_rotator.mark_success(self.current_proxy)
+                    self.pages_since_proxy_rotation += 1
+                    self.pages_scraped_in_session += 1
+
+                    # Layer 4: Smart delay between pages
+                    await self._smart_delay(page_num, cloudflare_detected=cloudflare_detected_this_page)
 
                     page_num += 1
                     break # Success, exit retry loop
