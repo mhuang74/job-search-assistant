@@ -24,8 +24,10 @@ from src.models import JobBoard
 # Load environment variables
 load_dotenv()
 
-# Setup logging
-logger.add("logs/job_search_{time}.log", rotation="1 day", retention="7 days")
+# Setup logging - Remove default handler and add file handler
+logger.remove()  # Remove default stderr handler
+log_file = "logs/job_search_{time}.log"
+file_handler_id = logger.add(log_file, rotation="1 day", retention="7 days", level="TRACE")
 
 console = Console()
 
@@ -81,14 +83,12 @@ def search(query: str, location: str, max_results: int, board: str, remote_only:
     With Kimi K2 Thinking:
       python main.py search "your query" --scraper crawl4ai --extraction-mode llm --llm-model openrouter/moonshot-ai/kimi-k2-thinking
     """
-    # Configure logging level
+    # Configure logging level - Add console handler (file handler remains active)
     if verbose:
-        logger.remove()
-        logger.add(lambda msg: console.print(msg, end=''), level="DEBUG")
+        console_handler_id = logger.add(lambda msg: console.print(msg, end=''), level="DEBUG")
         console.print("[yellow]🐛 Verbose logging enabled[/yellow]")
     else:
-        logger.remove()
-        logger.add(lambda msg: console.print(msg, end=''), level="INFO")
+        console_handler_id = logger.add(lambda msg: console.print(msg, end=''), level="INFO")
 
     console.print(f"\n[bold blue]Searching for:[/bold blue] {query}")
     console.print(f"[dim]Location: {location} | Board: {board} | Max results: {max_results}[/dim]")

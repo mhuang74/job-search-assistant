@@ -559,16 +559,16 @@ class IndeedKameleoScraper(BaseScraper):
             # Get page content
             content = await page.content()
 
-            # Check for CAPTCHA first
-            if 'verify you' in content.lower() or 'captcha' in content.lower():
-                logger.error("❌ CAPTCHA detected on Indeed page!")
-                logger.error("Indeed is showing a verification challenge.")
-                # Save HTML for inspection
-                debug_file = f"debug_indeed_captcha_{page_num}.html"
-                with open(debug_file, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                logger.error(f"💾 Saved page HTML to {debug_file} for inspection")
-                return []
+            # # Check for CAPTCHA first
+            # if 'verify you' in content.lower() or 'captcha' in content.lower():
+            #     logger.error("❌ CAPTCHA detected on Indeed page!")
+            #     logger.error("Indeed is showing a verification challenge.")
+            #     # Save HTML for inspection
+            #     debug_file = f"debug_indeed_captcha_{page_num}.html"
+            #     with open(debug_file, 'w', encoding='utf-8') as f:
+            #         f.write(content)
+            #     logger.error(f"💾 Saved page HTML to {debug_file} for inspection")
+            #     return []
 
             # Try to extract from mosaic JSON first (more reliable)
             jobs_data, total_count = self._extract_jobs_from_mosaic(content)
