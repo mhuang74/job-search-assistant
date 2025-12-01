@@ -70,13 +70,13 @@ class IndeedKameleoScraper(BaseScraper):
                 logger.error("  3. Download from: https://www.kameleo.io/")
                 raise
 
-            # Step 2: Search for macOS Chrome desktop fingerprints
-            logger.info("Searching for macOS Chrome desktop fingerprints...")
+            # Step 2: Search for macOS Safari desktop fingerprints
+            logger.info("Searching for macOS Safari desktop fingerprints...")
             try:
                 fingerprints = await asyncio.to_thread(
                     self.kameleo_client.fingerprint.search_fingerprints,
                     device_type='desktop',
-                    browser_product='chrome',
+                    browser_product='safari',
                     os_family='macos'
                 )
 
@@ -112,20 +112,47 @@ class IndeedKameleoScraper(BaseScraper):
                     from kameleo.local_api_client.models import ProxyChoice
                     parsed = urlparse(proxy_url)
 
+                    # Determine proxy type from scheme
+                    proxy_type = ProxyConnectionType.HTTP
+                    if parsed.scheme in ['socks5', 'socks5h']:
+                        proxy_type = ProxyConnectionType.SOCKS5
+                    elif parsed.scheme in ['ssh']:
+                        proxy_type = ProxyConnectionType.SSH
+                    
+                    # Ensure port is present
+                    port = parsed.port
+                    if not port:
+                        if parsed.scheme == 'http':
+                            port = 80
+                        elif parsed.scheme == 'https':
+                            port = 443
+                        elif parsed.scheme == 'socks5':
+                            port = 1080
+                        else:
+                            logger.warning(f"No port specified in proxy URL '{proxy_url}', defaulting to 80")
+                            port = 80
+
                     # Create Kameleo Server object for proxy
                     server = Server(
                         host=parsed.hostname,
-                        port=parsed.port,
+                        port=port,
                         id=parsed.username if parsed.username else None,
                         secret=parsed.password if parsed.password else None,
                     )
 
-                    # Create ProxyChoice with HTTP connection type
+                    # Create ProxyChoice
                     proxy_choice = ProxyChoice(
-                        value=ProxyConnectionType.HTTP,
+                        value=proxy_type,
                         extra=server
                     )
-                    logger.info(f"Browser configured with proxy: {parsed.hostname}:{parsed.port}")
+                    
+                    auth_status = "with auth" if parsed.username else "no auth"
+                    logger.info(f"Browser configured with proxy: {parsed.scheme}://{parsed.hostname}:{port} ({auth_status})")
+                    if parsed.username:
+                        # Log masked password for debugging
+                        masked_pass = '*' * len(parsed.password) if parsed.password else ''
+                        logger.debug(f"Proxy Auth - User: {parsed.username}, Pass: {masked_pass}")
+
                 except Exception as e:
                     logger.warning(f"Failed to parse proxy URL '{proxy_url}': {e}")
                     proxy_choice = None
@@ -306,6 +333,8 @@ class IndeedKameleoScraper(BaseScraper):
                     page_jobs = await self._scrape_page(query, location, page_num, remote_only)
                     break  # Success, exit retry loop
                 except Exception as e:
+                    logger.error(f"❌ Error scraping page {page_num + 1}: {e}")
+                    
                     error_name = type(e).__name__
                     error_str = str(e)
 
@@ -454,59 +483,21 @@ class IndeedKameleoScraper(BaseScraper):
                 return []
 
             # Parse job cards
-            job_data_list = []
+            jobs = []
             for card in job_cards:
                 try:
-                    job_data = self._parse_job_card(card)
-                    if job_data:
-                        job_data_list.append(job_data)
+                    job = self._parse_job_card(card)
+                    if job:
+                        jobs.append(job)
                 except Exception as e:
                     logger.warning(f"Failed to parse job card: {e}")
                     continue
 
-            logger.info(f"✅ Successfully parsed {len(job_data_list)} jobs from page {page_num}")
-
-            # Extract company websites for jobs
-            fetched_companies = {}
-            jobs = []
-
-            logger.info(f"🔗 Extracting company websites for {len(job_data_list)} job(s)...")
-
-            for idx, job_data in enumerate(job_data_list, 1):
-                job_listing = job_data['job_listing']
-                company_url = job_data['company_url']
-
-                logger.info(f"\n{'='*60}")
-                logger.info(f"Job {idx}/{len(job_data_list)}: {job_listing.title} at {job_listing.company}")
-                logger.info(f"{'='*60}")
-
-                # Try to fetch company website if we have a company URL
-                if company_url:
-                    logger.info(f"📍 Company URL found: {company_url}")
-
-                    # Check if we already fetched this company
-                    if company_url in fetched_companies:
-                        company_website = fetched_companies[company_url]
-                        logger.info(f"💾 Using cached company website for {job_listing.company}: {company_website or 'None'}")
-                    else:
-                        # Fetch company website
-                        logger.info(f"🚀 Fetching company website for: {job_listing.company}")
-                        company_website = await self._extract_company_website(page, company_url)
-                        fetched_companies[company_url] = company_website
-
-                        # Add small delay between company page fetches
-                        await self._random_delay(1, 2)
-
-                    # Update job listing with company website
-                    if company_website:
-                        job_listing.company_website = company_website
-                        logger.info(f"✅ Website set for {job_listing.company}: {company_website}")
-                    else:
-                        logger.info(f"⚠️  No website found for {job_listing.company}")
-                else:
-                    logger.info(f"⚠️  No company URL found in job card for {job_listing.company}")
-
-                jobs.append(job_listing)
+            logger.info(f"✅ Successfully parsed {len(jobs)} jobs from page {page_num}")
+            
+            # Log found jobs
+            for idx, job in enumerate(jobs, 1):
+                logger.info(f"Job {idx}/{len(jobs)}: {job.title} at {job.company}")
 
             return jobs
 
@@ -527,8 +518,8 @@ class IndeedKameleoScraper(BaseScraper):
             if page:
                 await page.close()
 
-    def _parse_job_card(self, card) -> Optional[dict]:
-        """Parse a single job card and return dict with job data and company URL"""
+    def _parse_job_card(self, card) -> Optional[JobListing]:
+        """Parse a single job card and return JobListing"""
         try:
             # Extract title and URL
             title_elem = card.find('h2', class_='jobTitle')
@@ -543,28 +534,9 @@ class IndeedKameleoScraper(BaseScraper):
             job_key = title_link.get('data-jk') or title_link.get('id', '').replace('job_', '')
             url = f"{self.base_url}/viewjob?jk={job_key}" if job_key else ""
 
-            # Extract company and company URL
+            # Extract company
             company_elem = card.find('span', {'data-testid': 'company-name'})
             company = company_elem.get_text(strip=True) if company_elem else "Unknown"
-
-            # Try to find company link
-            company_url = None
-            if company_elem:
-                # Look for a link in the parent hierarchy
-                company_link = company_elem.find_parent('a')
-                if not company_link:
-                    # Sometimes the link is a sibling or nearby element
-                    company_container = company_elem.find_parent('div')
-                    if company_container:
-                        company_link = company_container.find('a', href=re.compile(r'/cmp/'))
-
-                if company_link and company_link.get('href'):
-                    href = company_link.get('href')
-                    # Ensure it's a full URL
-                    if href.startswith('/'):
-                        company_url = f"{self.base_url}{href}"
-                    else:
-                        company_url = href
 
             # Extract location
             location_elem = card.find('div', {'data-testid': 'text-location'})
@@ -582,128 +554,24 @@ class IndeedKameleoScraper(BaseScraper):
             salary_elem = card.find('div', class_=re.compile(r'salary-snippet'))
             salary_text = salary_elem.get_text(strip=True) if salary_elem else None
 
-            return {
-                'job_listing': JobListing(
-                    id=job_key or None,
-                    title=title,
-                    company=company,
-                    location=location,
-                    description=description,
-                    url=url,
-                    posted_date=posted_date,
-                    board_source=JobBoard.INDEED,
-                    remote_type="Remote" if "remote" in location.lower() else None,
-                    scraped_at=datetime.now()
-                ),
-                'company_url': company_url
-            }
+            return JobListing(
+                id=job_key or None,
+                title=title,
+                company=company,
+                location=location,
+                description=description,
+                url=url,
+                posted_date=posted_date,
+                board_source=JobBoard.INDEED,
+                remote_type="Remote" if "remote" in location.lower() else None,
+                scraped_at=datetime.now()
+            )
 
         except Exception as e:
             logger.warning(f"Error parsing job card: {e}")
             return None
 
-    async def _extract_company_website(self, page: Page, company_url: str) -> Optional[str]:
-        """
-        Navigate to company page and extract website URL
 
-        Args:
-            page: Playwright page object
-            company_url: URL to company page on Indeed
-
-        Returns:
-            Company website URL if found, None otherwise
-        """
-        if not company_url:
-            return None
-
-        try:
-            logger.info(f"🌐 Opening company page: {company_url}")
-
-            # Navigate to company page
-            response = await page.goto(company_url, wait_until='domcontentloaded', timeout=15000)
-            logger.info(f"   📄 Response status: {response.status}")
-
-            if response.status >= 400:
-                logger.warning(f"   ❌ Failed to load company page (status {response.status})")
-                return None
-
-            # Wait for page to load
-            await page.wait_for_timeout(1000)
-
-            # Get page content
-            content = await page.content()
-            soup = BeautifulSoup(content, 'html.parser')
-
-            # Look for the company website using multiple patterns
-            website_candidates = []
-            logger.info(f"   🔍 Searching for company website...")
-
-            # Pattern 1: Look for "Website" or "Link" label
-            for link_elem in soup.find_all('a', href=True):
-                href = link_elem.get('href', '')
-                text = link_elem.get_text(strip=True).lower()
-
-                # Check if this is labeled as website/link
-                parent_text = ''
-                if link_elem.parent:
-                    parent_text = link_elem.parent.get_text(strip=True).lower()
-
-                # Look for indicators this is the company website
-                is_website = any([
-                    'website' in text or 'website' in parent_text,
-                    'link' in parent_text and len(text) > 5,
-                    text == 'visit website',
-                    text == 'company website',
-                ])
-
-                # Exclude Indeed internal links
-                is_external = not any([
-                    'indeed.com' in href,
-                    href.startswith('/'),
-                    href.startswith('#'),
-                    'mailto:' in href,
-                    'tel:' in href,
-                ])
-
-                if is_website and is_external:
-                    website_candidates.append(href)
-
-            # Pattern 2: Look in structured data containers
-            info_sections = soup.find_all(['div', 'section'], class_=re.compile(r'(company.*info|about|details)', re.I))
-
-            for section in info_sections:
-                links = section.find_all('a', href=True)
-                for link in links:
-                    href = link.get('href', '')
-                    if href and not any([
-                        'indeed.com' in href,
-                        href.startswith('/'),
-                        href.startswith('#'),
-                        'mailto:' in href,
-                        'tel:' in href,
-                    ]):
-                        nearby_text = link.get_text(strip=True).lower()
-                        if nearby_text and len(nearby_text) > 3:
-                            website_candidates.append(href)
-
-            # Pattern 3: Look for data attributes
-            website_links = soup.find_all('a', {'data-testid': re.compile(r'(website|link|url)', re.I)})
-            for link in website_links:
-                href = link.get('href', '')
-                if href and 'indeed.com' not in href and not href.startswith('/'):
-                    website_candidates.append(href)
-
-            if website_candidates:
-                website_url = website_candidates[0]
-                logger.info(f"   ✅ EXTRACTED WEBSITE: {website_url}")
-                return website_url
-
-            logger.info("   ❌ No company website found on page")
-            return None
-
-        except Exception as e:
-            logger.warning(f"   ❌ Error extracting company website: {type(e).__name__}: {e}")
-            return None
 
     def _parse_posted_date(self, date_text: str) -> datetime:
         """Parse Indeed's relative date format (e.g., '2 days ago')"""
