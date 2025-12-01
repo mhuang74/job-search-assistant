@@ -340,15 +340,24 @@ class IndeedKameleoScraper(BaseScraper):
                 logger.warning("Mosaic JSON data not found in page")
                 return [], 0
 
-            data = json.loads(match.group(1))
+            raw_json = match.group(1)
+            logger.debug(f"Raw mosaic JSON extracted (length: {len(raw_json)} chars)")
+            logger.debug(f"Raw mosaic JSON preview: {raw_json[:500]}...")
+
+            data = json.loads(raw_json)
+            logger.debug(f"Parsed mosaic data keys: {list(data.keys())}")
 
             # Extract job results
             jobs_data = data.get('metaData', {}).get('mosaicProviderJobCardsModel', {})
+            logger.debug(f"Job cards model keys: {list(jobs_data.keys())}")
+
             jobs_list = jobs_data.get('results', [])
+            logger.debug(f"Number of job results in raw data: {len(jobs_list)}")
 
             # Get total count from tier summaries
             tier_summaries = jobs_data.get('tierSummaries', [])
             total_count = sum(tier.get('jobCount', 0) for tier in tier_summaries)
+            logger.debug(f"Tier summaries: {tier_summaries}")
 
             logger.info(f"Extracted {len(jobs_list)} jobs from mosaic JSON (total available: {total_count})")
             return jobs_list, total_count
@@ -363,6 +372,12 @@ class IndeedKameleoScraper(BaseScraper):
     def _parse_mosaic_job(self, job_data: Dict[str, Any]) -> Optional[JobListing]:
         """Parse a single job from mosaic JSON data"""
         try:
+            # Log raw job data
+            # logger.debug("=" * 80)
+            # logger.debug("Raw mosaic job data:")
+            # logger.debug(json.dumps(job_data, indent=2, default=str))
+            # logger.debug("=" * 80)
+
             job_key = job_data.get('jobkey', '')
             title = job_data.get('title', job_data.get('displayTitle', ''))
             company = job_data.get('company', 'Unknown')
@@ -394,7 +409,7 @@ class IndeedKameleoScraper(BaseScraper):
                 salary_min = salary_info.get('min')
                 salary_max = salary_info.get('max')
 
-            return JobListing(
+            job_listing = JobListing(
                 id=job_key or None,
                 title=title,
                 company=company,
@@ -409,8 +424,25 @@ class IndeedKameleoScraper(BaseScraper):
                 salary_max=salary_max,
             )
 
+            # Log parsed fields
+            # logger.debug("Parsed job fields:")
+            # logger.debug(f"  job_key: {job_key}")
+            # logger.debug(f"  title: {title}")
+            # logger.debug(f"  company: {company}")
+            # logger.debug(f"  location: {location}")
+            # logger.debug(f"  remote_type: {remote_type}")
+            # logger.debug(f"  date_str: {date_str}")
+            # logger.debug(f"  posted_date: {posted_date}")
+            # logger.debug(f"  salary_min: {salary_min}")
+            # logger.debug(f"  salary_max: {salary_max}")
+            # logger.debug(f"  description: {description[:100]}..." if len(description) > 100 else f"  description: {description}")
+            # logger.debug(f"  url: {url}")
+
+            return job_listing
+
         except Exception as e:
             logger.warning(f"Error parsing mosaic job: {e}")
+            logger.exception("Full traceback:")
             return None
 
     async def search(
@@ -655,13 +687,21 @@ class IndeedKameleoScraper(BaseScraper):
     def _parse_job_card(self, card) -> Optional[JobListing]:
         """Parse a single job card and return JobListing"""
         try:
+            # Log raw card HTML
+            # logger.debug("=" * 80)
+            # logger.debug("Raw DOM job card HTML:")
+            # logger.debug(str(card)[:1000] + ("..." if len(str(card)) > 1000 else ""))
+            # logger.debug("=" * 80)
+
             # Extract title and URL
             title_elem = card.find('h2', class_='jobTitle')
             if not title_elem:
+                logger.debug("No title element found with class 'jobTitle'")
                 return None
 
             title_link = title_elem.find('a')
             if not title_link:
+                logger.debug("No anchor tag found in title element")
                 return None
 
             title = title_link.get_text(strip=True)
@@ -682,13 +722,14 @@ class IndeedKameleoScraper(BaseScraper):
 
             # Extract posted date
             date_elem = card.find('span', class_='date')
-            posted_date = self._parse_posted_date(date_elem.get_text(strip=True) if date_elem else "")
+            date_str = date_elem.get_text(strip=True) if date_elem else ""
+            posted_date = self._parse_posted_date(date_str)
 
             # Extract salary if available
             salary_elem = card.find('div', class_=re.compile(r'salary-snippet'))
             salary_text = salary_elem.get_text(strip=True) if salary_elem else None
 
-            return JobListing(
+            job_listing = JobListing(
                 id=job_key or None,
                 title=title,
                 company=company,
@@ -701,8 +742,23 @@ class IndeedKameleoScraper(BaseScraper):
                 scraped_at=datetime.now()
             )
 
+            # Log parsed fields
+            # logger.debug("Parsed DOM job fields:")
+            # logger.debug(f"  job_key: {job_key}")
+            # logger.debug(f"  title: {title}")
+            # logger.debug(f"  company: {company}")
+            # logger.debug(f"  location: {location}")
+            # logger.debug(f"  date_str: {date_str}")
+            # logger.debug(f"  posted_date: {posted_date}")
+            # logger.debug(f"  salary_text: {salary_text}")
+            # logger.debug(f"  description: {description[:100]}..." if len(description) > 100 else f"  description: {description}")
+            # logger.debug(f"  url: {url}")
+
+            return job_listing
+
         except Exception as e:
             logger.warning(f"Error parsing job card: {e}")
+            logger.exception("Full traceback:")
             return None
 
 
