@@ -232,9 +232,10 @@ class IndeedCrawl4AIScraper(BaseScraper):
         browser_config_args = {
             "browser_type": self.config.get('browser', 'chromium'),
             "headless": self.config.get('headless', True),
-            "viewport_width": self.config.get('viewport_width', 1920),
-            "viewport_height": self.config.get('viewport_height', 1080),
-            "user_agent": self._get_random_user_agent(),
+            "viewport_width": 1920 + random.randint(-50, 50),
+            "viewport_height": 1080 + random.randint(-50, 50),
+            # Use fixed, modern User-Agent for better consistency and trust
+            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "extra_args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -262,7 +263,7 @@ class IndeedCrawl4AIScraper(BaseScraper):
             # Content handling
             wait_until="domcontentloaded",
             # Wait for JS interaction to complete
-            wait_for="body[data-interaction-done='true']",
+            # wait_for="body[data-interaction-done='true']",
             # Fallback delay if wait_for doesn't catch it (though wait_for should take precedence)
             delay_before_return_html=2.0,
             # Caching
@@ -270,7 +271,8 @@ class IndeedCrawl4AIScraper(BaseScraper):
             # Session management
             session_id="indeed_scraper",
             # JS Execution
-            js_code=self._get_interaction_js() if not use_llm else None,
+            # js_code=self._get_interaction_js() if not use_llm else None,
+            js_code=None,
         )
 
     def _get_interaction_js(self) -> str:
@@ -443,6 +445,20 @@ class IndeedCrawl4AIScraper(BaseScraper):
                         config=self._get_crawler_config(use_llm=use_llm)
                     )
 
+                    # Cloudflare Detection
+                    if result.html and ("challenges.cloudflare.com" in result.html or "Verify you are human" in result.html):
+                        logger.warning(f"[Crawl4AI] Cloudflare challenge detected on page {page_num + 1}!")
+                        
+                        if not self.config.get('headless', True):
+                            logger.warning("[Crawl4AI] Headful mode detected. Waiting 30s for manual solution...")
+                            await asyncio.sleep(30)
+                            # Retry immediately after wait
+                            continue
+                        else:
+                            logger.error("[Crawl4AI] Cloudflare challenge in headless mode. Aborting this page.")
+                            # Treat as failure to trigger backoff/retry or skip
+                            raise RuntimeError("Cloudflare challenge detected in headless mode")
+
                     if not result.success:
                         logger.warning(f"[Crawl4AI] Failed to fetch page: {result.error_message}")
                         # Check for specific navigation errors
@@ -489,7 +505,7 @@ class IndeedCrawl4AIScraper(BaseScraper):
                     logger.info(f"[Crawl4AI] Found {len(page_jobs)} jobs on page {page_num + 1} (total: {len(jobs)})")
 
                     # Anti-detection delay between pages
-                    delay = random.uniform(4, 8)
+                    delay = random.uniform(5, 10)
                     logger.debug(f"[Crawl4AI] Waiting {delay:.1f}s before next page...")
                     await asyncio.sleep(delay)
 
@@ -506,45 +522,46 @@ class IndeedCrawl4AIScraper(BaseScraper):
                             return jobs[:max_results]
                     
                     # Exponential backoff
-                    wait_time = 2 ** retry_count * 2  # 4, 8, 16 seconds
+                    wait_time = 2 ** retry_count * 5  # Increased backoff: 10, 20, 40 seconds
                     await asyncio.sleep(wait_time)
 
         # Post-processing: Fetch company metadata for unique companies
-        unique_companies = {}
-        for job in jobs:
-            if job.company_website and 'indeed.com/cmp/' in job.company_website:
-                unique_companies[job.company_website] = None
+        # Post-processing: Fetch company metadata for unique companies
+        # unique_companies = {}
+        # for job in jobs:
+        #     if job.company_website and 'indeed.com/cmp/' in job.company_website:
+        #         unique_companies[job.company_website] = None
 
-        logger.info(f"[Crawl4AI] extracting metadata for {len(unique_companies)} companies...")
+        # logger.info(f"[Crawl4AI] extracting metadata for {len(unique_companies)} companies...")
         
-        for company_url in unique_companies:
-            try:
-                metadata = await self.extract_company_metadata(company_url)
-                unique_companies[company_url] = metadata
-                # Random delay between company pages
-                await asyncio.sleep(random.uniform(2, 5))
-            except Exception as e:
-                logger.error(f"[Crawl4AI] Failed to extract metadata for {company_url}: {e}")
+        # for company_url in unique_companies:
+        #     try:
+        #         metadata = await self.extract_company_metadata(company_url)
+        #         unique_companies[company_url] = metadata
+        #         # Random delay between company pages
+        #         await asyncio.sleep(random.uniform(2, 5))
+        #     except Exception as e:
+        #         logger.error(f"[Crawl4AI] Failed to extract metadata for {company_url}: {e}")
 
         # Enrich jobs with company metadata
         enriched_jobs = []
         for job in jobs:
-            if job.company_website and job.company_website in unique_companies:
-                metadata = unique_companies[job.company_website]
-                if metadata:
-                    # Create EnrichedJob
-                    enriched_job = EnrichedJob.from_job_listing(
-                        job,
-                        company_size=metadata.get('company_size'),
-                        industry=metadata.get('industry'),
-                        headquarters_location=metadata.get('headquarters'),
-                        company_website=metadata.get('website_url') or job.company_website # Prefer official site if found
-                    )
-                    enriched_jobs.append(enriched_job)
-                else:
-                    enriched_jobs.append(job)
-            else:
-                enriched_jobs.append(job)
+            # if job.company_website and job.company_website in unique_companies:
+            #     metadata = unique_companies[job.company_website]
+            #     if metadata:
+            #         # Create EnrichedJob
+            #         enriched_job = EnrichedJob.from_job_listing(
+            #             job,
+            #             company_size=metadata.get('company_size'),
+            #             industry=metadata.get('industry'),
+            #             headquarters_location=metadata.get('headquarters'),
+            #             company_website=metadata.get('website_url') or job.company_website # Prefer official site if found
+            #         )
+            #         enriched_jobs.append(enriched_job)
+            #     else:
+            #         enriched_jobs.append(job)
+            # else:
+            enriched_jobs.append(job)
 
         logger.info(f"[Crawl4AI] Search complete. Total jobs found: {len(enriched_jobs)}")
         return enriched_jobs[:max_results]
