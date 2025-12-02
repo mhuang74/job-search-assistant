@@ -1,10 +1,11 @@
 """Indeed job board scraper using Playwright with Kameleo browser profiles"""
 import asyncio
+import json
 import os
 import random
 import re
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from urllib.parse import urlencode
 from loguru import logger
 from playwright.async_api import async_playwright, Page, Browser
@@ -21,9 +22,21 @@ from kameleo.local_api_client.models import (
 from .base import BaseScraper
 from ..models import JobListing, JobBoard
 
+# Pattern to extract mosaic data (embedded JSON with job listings)
+MOSAIC_PATTERN = r'window\.mosaic\.providerData\["mosaic-provider-jobcards"\]\s*=\s*({.*?});'
+
 
 class IndeedKameleoScraper(BaseScraper):
-    """Indeed scraper using Playwright with Kameleo browser profiles for enhanced anti-detection"""
+    """
+    Indeed scraper using Playwright with Kameleo browser profiles for enhanced anti-detection.
+
+    Features:
+    - Real browser fingerprints via Kameleo
+    - Mosaic JSON extraction (more reliable than DOM parsing)
+    - Fallback to DOM parsing if mosaic data not available
+    - Proxy support
+    - Automatic browser reconnection on failures
+    """
 
     def __init__(self, config: dict = None):
         super().__init__(JobBoard.INDEED, config)
@@ -157,27 +170,56 @@ class IndeedKameleoScraper(BaseScraper):
                     logger.warning(f"Failed to parse proxy URL '{proxy_url}': {e}")
                     proxy_choice = None
 
-            # Step 4: Create Kameleo profile
-            logger.info("Creating Kameleo profile...")
-            profile_name = f"Indeed Scraper - {datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-            create_profile_request = CreateProfileRequest(
-                fingerprint_id=fingerprint.id,
-                name=profile_name,
-            )
-
-            # Add proxy if configured
-            if proxy_choice:
-                create_profile_request.proxy = proxy_choice
-
+            # Step 4: Find or create Kameleo profile
+            profile_name = "indeed-scraper"
+            logger.info(f"Looking for existing profile '{profile_name}'...")
+            
             try:
-                self.kameleo_profile = await asyncio.to_thread(
-                    self.kameleo_client.profile.create_profile,
-                    create_profile_request
+                # Search for existing profile by name
+                profiles = await asyncio.to_thread(
+                    self.kameleo_client.profile.list_profiles
                 )
-                logger.info(f"✅ Created Kameleo profile: {profile_name} (ID: {self.kameleo_profile.id})")
+                
+                existing_profile = None
+                for profile in profiles:
+                    if profile.name == profile_name:
+                        existing_profile = profile
+                        break
+                
+                if existing_profile:
+                    logger.info(f"✅ Found existing profile '{profile_name}' (ID: {existing_profile.id})")
+                    logger.info("Using profile as-is without modifications")
+                    logger.info(f"Profile details:")
+                    logger.info(f"  - Name: {existing_profile.name}")
+                    logger.info(f"  - ID: {existing_profile.id}")
+                    if hasattr(existing_profile, 'proxy') and existing_profile.proxy:
+                        logger.info(f"  - Proxy configured: Yes")
+                        if hasattr(existing_profile.proxy, 'extra') and existing_profile.proxy.extra:
+                            proxy_server = existing_profile.proxy.extra
+                            logger.info(f"  - Proxy host: {proxy_server.host if hasattr(proxy_server, 'host') else 'N/A'}")
+                            logger.info(f"  - Proxy port: {proxy_server.port if hasattr(proxy_server, 'port') else 'N/A'}")
+                    else:
+                        logger.info(f"  - Proxy configured: No")
+                    self.kameleo_profile = existing_profile
+                else:
+                    logger.info(f"Profile '{profile_name}' not found, creating new one...")
+                    create_profile_request = CreateProfileRequest(
+                        fingerprint_id=fingerprint.id,
+                        name=profile_name,
+                    )
+
+                    # Add proxy if configured
+                    if proxy_choice:
+                        create_profile_request.proxy = proxy_choice
+
+                    self.kameleo_profile = await asyncio.to_thread(
+                        self.kameleo_client.profile.create_profile,
+                        create_profile_request
+                    )
+                    logger.info(f"✅ Created new Kameleo profile: {profile_name} (ID: {self.kameleo_profile.id})")
+                    
             except Exception as e:
-                logger.error(f"❌ Failed to create Kameleo profile: {e}")
+                logger.error(f"❌ Failed to find/create Kameleo profile: {e}")
                 raise
 
             # Step 5: Start the Kameleo profile
@@ -268,7 +310,7 @@ class IndeedKameleoScraper(BaseScraper):
                 pass
             self.playwright = None
 
-        # Stop and delete Kameleo profile
+        # Stop Kameleo profile (but don't delete it for reuse)
         if self.kameleo_client and self.kameleo_profile:
             try:
                 logger.info("Stopping Kameleo profile...")
@@ -276,23 +318,132 @@ class IndeedKameleoScraper(BaseScraper):
                     self.kameleo_client.profile.stop_profile,
                     self.kameleo_profile.id
                 )
-                logger.info("✅ Kameleo profile stopped")
+                logger.info("✅ Kameleo profile stopped (preserved for reuse)")
             except Exception as e:
                 logger.warning(f"Failed to stop Kameleo profile: {e}")
 
-            try:
-                logger.info("Deleting Kameleo profile...")
-                await asyncio.to_thread(
-                    self.kameleo_client.profile.delete_profile,
-                    self.kameleo_profile.id
-                )
-                logger.info("✅ Kameleo profile deleted")
-            except Exception as e:
-                logger.warning(f"Failed to delete Kameleo profile: {e}")
-
             self.kameleo_profile = None
 
-        logger.info("Browser closed and Kameleo profile cleaned up")
+        logger.info("Browser closed and Kameleo profile stopped")
+
+    def _extract_jobs_from_mosaic(self, html: str) -> tuple[List[Dict[str, Any]], int]:
+        """
+        Extract job data from embedded mosaic JSON instead of DOM parsing.
+        This is more reliable as the data structure is more stable than HTML selectors.
+
+        Returns:
+            Tuple of (jobs_list, total_count)
+        """
+        try:
+            match = re.search(MOSAIC_PATTERN, html, re.DOTALL)
+            if not match:
+                logger.warning("Mosaic JSON data not found in page")
+                return [], 0
+
+            raw_json = match.group(1)
+            logger.debug(f"Raw mosaic JSON extracted (length: {len(raw_json)} chars)")
+            logger.debug(f"Raw mosaic JSON preview: {raw_json[:500]}...")
+
+            data = json.loads(raw_json)
+            logger.debug(f"Parsed mosaic data keys: {list(data.keys())}")
+
+            # Extract job results
+            jobs_data = data.get('metaData', {}).get('mosaicProviderJobCardsModel', {})
+            logger.debug(f"Job cards model keys: {list(jobs_data.keys())}")
+
+            jobs_list = jobs_data.get('results', [])
+            logger.debug(f"Number of job results in raw data: {len(jobs_list)}")
+
+            # Get total count from tier summaries
+            tier_summaries = jobs_data.get('tierSummaries', [])
+            total_count = sum(tier.get('jobCount', 0) for tier in tier_summaries)
+            logger.debug(f"Tier summaries: {tier_summaries}")
+
+            logger.info(f"Extracted {len(jobs_list)} jobs from mosaic JSON (total available: {total_count})")
+            return jobs_list, total_count
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse mosaic JSON: {e}")
+            return [], 0
+        except Exception as e:
+            logger.error(f"Error extracting mosaic data: {e}")
+            return [], 0
+
+    def _parse_mosaic_job(self, job_data: Dict[str, Any]) -> Optional[JobListing]:
+        """Parse a single job from mosaic JSON data"""
+        try:
+            # Log raw job data
+            # logger.debug("=" * 80)
+            # logger.debug("Raw mosaic job data:")
+            # logger.debug(json.dumps(job_data, indent=2, default=str))
+            # logger.debug("=" * 80)
+
+            job_key = job_data.get('jobkey', '')
+            title = job_data.get('title', job_data.get('displayTitle', ''))
+            company = job_data.get('company', 'Unknown')
+            location = job_data.get('formattedLocation', job_data.get('jobLocationCity', 'Remote'))
+
+            # Build job URL
+            url = f"{self.base_url}/viewjob?jk={job_key}" if job_key else ""
+
+            # Extract description snippet
+            description = job_data.get('snippet', '')
+            if not description:
+                # Try to build from snippet items
+                snippet_items = job_data.get('jobSnippetHtmlItems', [])
+                description = ' '.join(snippet_items)
+
+            # Parse date - Indeed provides relative dates like "3 days ago"
+            date_str = job_data.get('formattedRelativeTime', '')
+            posted_date = self._parse_posted_date(date_str)
+
+            # Check if remote
+            remote_location = job_data.get('remoteLocation', False)
+            remote_type = "Remote" if remote_location or "remote" in location.lower() else None
+
+            # Extract salary if available
+            salary_info = job_data.get('extractedSalary', {})
+            salary_min = None
+            salary_max = None
+            if salary_info:
+                salary_min = salary_info.get('min')
+                salary_max = salary_info.get('max')
+
+            job_listing = JobListing(
+                id=job_key or None,
+                title=title,
+                company=company,
+                location=location,
+                description=description,
+                url=url,
+                posted_date=posted_date,
+                board_source=JobBoard.INDEED,
+                remote_type=remote_type,
+                scraped_at=datetime.now(),
+                salary_min=salary_min,
+                salary_max=salary_max,
+            )
+
+            # Log parsed fields
+            # logger.debug("Parsed job fields:")
+            # logger.debug(f"  job_key: {job_key}")
+            # logger.debug(f"  title: {title}")
+            # logger.debug(f"  company: {company}")
+            # logger.debug(f"  location: {location}")
+            # logger.debug(f"  remote_type: {remote_type}")
+            # logger.debug(f"  date_str: {date_str}")
+            # logger.debug(f"  posted_date: {posted_date}")
+            # logger.debug(f"  salary_min: {salary_min}")
+            # logger.debug(f"  salary_max: {salary_max}")
+            # logger.debug(f"  description: {description[:100]}..." if len(description) > 100 else f"  description: {description}")
+            # logger.debug(f"  url: {url}")
+
+            return job_listing
+
+        except Exception as e:
+            logger.warning(f"Error parsing mosaic job: {e}")
+            logger.exception("Full traceback:")
+            return None
 
     async def search(
         self,
@@ -440,23 +591,38 @@ class IndeedKameleoScraper(BaseScraper):
             # Get page content
             content = await page.content()
 
-            # Parse with BeautifulSoup
+            # # Check for CAPTCHA first
+            # if 'verify you' in content.lower() or 'captcha' in content.lower():
+            #     logger.error("❌ CAPTCHA detected on Indeed page!")
+            #     logger.error("Indeed is showing a verification challenge.")
+            #     # Save HTML for inspection
+            #     debug_file = f"debug_indeed_captcha_{page_num}.html"
+            #     with open(debug_file, 'w', encoding='utf-8') as f:
+            #         f.write(content)
+            #     logger.error(f"💾 Saved page HTML to {debug_file} for inspection")
+            #     return []
+
+            # Try to extract from mosaic JSON first (more reliable)
+            jobs_data, total_count = self._extract_jobs_from_mosaic(content)
+
+            if jobs_data:
+                jobs = []
+                for job_data in jobs_data:
+                    job = self._parse_mosaic_job(job_data)
+                    if job:
+                        jobs.append(job)
+
+                logger.info(f"✅ Successfully extracted {len(jobs)} jobs from mosaic JSON on page {page_num}")
+
+                # Log found jobs
+                for idx, job in enumerate(jobs, 1):
+                    logger.info(f"Job {idx}/{len(jobs)}: {job.title} at {job.company}")
+
+                return jobs
+
+            # Fallback to DOM parsing if mosaic not found
+            logger.info("Mosaic JSON not found, falling back to DOM parsing...")
             soup = BeautifulSoup(content, 'html.parser')
-
-            # Check for CAPTCHA
-            captcha_elements = soup.find_all(['div', 'iframe', 'form'],
-                                            class_=re.compile(r'(recaptcha|captcha-container|hcaptcha)', re.I))
-            has_captcha_challenge = soup.find(string=re.compile(r'(verify you.re human|solve.*captcha|complete.*verification)', re.I))
-
-            if captcha_elements or has_captcha_challenge:
-                logger.error("❌ CAPTCHA detected on Indeed page!")
-                logger.error("Indeed is showing a verification challenge.")
-                # Save HTML for inspection
-                debug_file = f"debug_indeed_captcha_{page_num}.html"
-                with open(debug_file, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                logger.error(f"💾 Saved page HTML to {debug_file} for inspection")
-                return []
 
             # Find job cards
             job_cards = soup.find_all('div', class_=re.compile(r'job_seen_beacon'))
@@ -482,7 +648,7 @@ class IndeedKameleoScraper(BaseScraper):
 
                 return []
 
-            # Parse job cards
+            # Parse job cards from DOM
             jobs = []
             for card in job_cards:
                 try:
@@ -493,8 +659,8 @@ class IndeedKameleoScraper(BaseScraper):
                     logger.warning(f"Failed to parse job card: {e}")
                     continue
 
-            logger.info(f"✅ Successfully parsed {len(jobs)} jobs from page {page_num}")
-            
+            logger.info(f"✅ Successfully parsed {len(jobs)} jobs from DOM on page {page_num}")
+
             # Log found jobs
             for idx, job in enumerate(jobs, 1):
                 logger.info(f"Job {idx}/{len(jobs)}: {job.title} at {job.company}")
@@ -521,13 +687,21 @@ class IndeedKameleoScraper(BaseScraper):
     def _parse_job_card(self, card) -> Optional[JobListing]:
         """Parse a single job card and return JobListing"""
         try:
+            # Log raw card HTML
+            # logger.debug("=" * 80)
+            # logger.debug("Raw DOM job card HTML:")
+            # logger.debug(str(card)[:1000] + ("..." if len(str(card)) > 1000 else ""))
+            # logger.debug("=" * 80)
+
             # Extract title and URL
             title_elem = card.find('h2', class_='jobTitle')
             if not title_elem:
+                logger.debug("No title element found with class 'jobTitle'")
                 return None
 
             title_link = title_elem.find('a')
             if not title_link:
+                logger.debug("No anchor tag found in title element")
                 return None
 
             title = title_link.get_text(strip=True)
@@ -548,13 +722,14 @@ class IndeedKameleoScraper(BaseScraper):
 
             # Extract posted date
             date_elem = card.find('span', class_='date')
-            posted_date = self._parse_posted_date(date_elem.get_text(strip=True) if date_elem else "")
+            date_str = date_elem.get_text(strip=True) if date_elem else ""
+            posted_date = self._parse_posted_date(date_str)
 
             # Extract salary if available
             salary_elem = card.find('div', class_=re.compile(r'salary-snippet'))
             salary_text = salary_elem.get_text(strip=True) if salary_elem else None
 
-            return JobListing(
+            job_listing = JobListing(
                 id=job_key or None,
                 title=title,
                 company=company,
@@ -567,8 +742,23 @@ class IndeedKameleoScraper(BaseScraper):
                 scraped_at=datetime.now()
             )
 
+            # Log parsed fields
+            # logger.debug("Parsed DOM job fields:")
+            # logger.debug(f"  job_key: {job_key}")
+            # logger.debug(f"  title: {title}")
+            # logger.debug(f"  company: {company}")
+            # logger.debug(f"  location: {location}")
+            # logger.debug(f"  date_str: {date_str}")
+            # logger.debug(f"  posted_date: {posted_date}")
+            # logger.debug(f"  salary_text: {salary_text}")
+            # logger.debug(f"  description: {description[:100]}..." if len(description) > 100 else f"  description: {description}")
+            # logger.debug(f"  url: {url}")
+
+            return job_listing
+
         except Exception as e:
             logger.warning(f"Error parsing job card: {e}")
+            logger.exception("Full traceback:")
             return None
 
 
