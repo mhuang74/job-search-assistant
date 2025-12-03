@@ -28,7 +28,7 @@ async def test_search():
             jobs = await scraper.search(
                 query='technical product manager',
                 location='Remote',
-                max_results=20,
+                max_results=3,
                 remote_only=True
             )
 
@@ -42,6 +42,7 @@ async def test_search():
                 logger.info(f"Job {idx}: {job.title}")
                 logger.info(f"{'─'*80}")
                 logger.info(f"  Company: {job.company}")
+                logger.info(f"  Company Website: {job.company_website}")
                 logger.info(f"  Location: {job.location}")
                 logger.info(f"  Posted: {job.posted_date.strftime('%Y-%m-%d')}")
                 logger.info(f"  URL: {job.url}")
