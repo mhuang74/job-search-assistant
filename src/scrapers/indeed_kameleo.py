@@ -171,7 +171,7 @@ class IndeedKameleoScraper(BaseScraper):
                     proxy_choice = None
 
             # Step 4: Find or create Kameleo profile
-            profile_name = "indeed-scraper"
+            profile_name = "indeed-scraper-2"
             logger.info(f"Looking for existing profile '{profile_name}'...")
             
             try:
@@ -193,7 +193,6 @@ class IndeedKameleoScraper(BaseScraper):
                     logger.info(f"  - Name: {existing_profile.name}")
                     logger.info(f"  - ID: {existing_profile.id}")
                     if hasattr(existing_profile, 'proxy') and existing_profile.proxy:
-                        logger.info(f"  - Proxy configured: Yes")
                         if hasattr(existing_profile.proxy, 'extra') and existing_profile.proxy.extra:
                             proxy_server = existing_profile.proxy.extra
                             logger.info(f"  - Proxy host: {proxy_server.host if hasattr(proxy_server, 'host') else 'N/A'}")
@@ -345,11 +344,11 @@ class IndeedKameleoScraper(BaseScraper):
             logger.debug(f"Raw mosaic JSON preview: {raw_json[:500]}...")
 
             data = json.loads(raw_json)
-            logger.debug(f"Parsed mosaic data keys: {list(data.keys())}")
+            # logger.debug(f"Parsed mosaic data keys: {list(data.keys())}")
 
             # Extract job results
             jobs_data = data.get('metaData', {}).get('mosaicProviderJobCardsModel', {})
-            logger.debug(f"Job cards model keys: {list(jobs_data.keys())}")
+            # logger.debug(f"Job cards model keys: {list(jobs_data.keys())}")
 
             jobs_list = jobs_data.get('results', [])
             logger.debug(f"Number of job results in raw data: {len(jobs_list)}")
@@ -372,7 +371,7 @@ class IndeedKameleoScraper(BaseScraper):
     def _parse_mosaic_job(self, job_data: Dict[str, Any]) -> Optional[JobListing]:
         """Parse a single job from mosaic JSON data"""
         try:
-            # Log raw job data
+            # Log raw job data for debugging (enable when needed)
             # logger.debug("=" * 80)
             # logger.debug("Raw mosaic job data:")
             # logger.debug(json.dumps(job_data, indent=2, default=str))
@@ -409,6 +408,19 @@ class IndeedKameleoScraper(BaseScraper):
                 salary_min = salary_info.get('min')
                 salary_max = salary_info.get('max')
 
+            # Extract company page link for website extraction
+            # Note: companyOverviewLink exists but lacks tracking parameters (campaignid, from, tk, fromjk)
+            # These parameters are required to avoid bot detection on company pages
+            # So we always need to visit the job detail page to get the properly parameterized URL
+            #
+            # Terminology:
+            # - "company URL" = Indeed company detail page (e.g., indeed.com/cmp/Google)
+            # - "company website" = Actual hiring company's website (e.g., www.google.com)
+            company_overview_link = job_data.get('companyOverviewLink', '')
+
+            # Check if company link is available
+            has_company_link = bool(company_overview_link)
+
             job_listing = JobListing(
                 id=job_key or None,
                 title=title,
@@ -422,7 +434,18 @@ class IndeedKameleoScraper(BaseScraper):
                 scraped_at=datetime.now(),
                 salary_min=salary_min,
                 salary_max=salary_max,
+                company_website=None,  # Will be populated by _extract_company_website
             )
+
+            # Set flag to extract company URL (Indeed company page) from job detail page
+            # We always need to visit the job page because:
+            # 1. If we have company link: need to get it with tracking parameters
+            # 2. If we don't have company link: need to try extracting it from job page
+            job_listing._needs_company_url = True
+            if has_company_link:
+                logger.debug(f"Company link found in mosaic, will extract full URL with params from job page")
+            else:
+                logger.debug(f"No company link in mosaic data, will attempt extraction from job page")
 
             # Log parsed fields
             # logger.debug("Parsed job fields:")
@@ -481,7 +504,11 @@ class IndeedKameleoScraper(BaseScraper):
 
             while retry_count < max_retries:
                 try:
-                    page_jobs = await self._scrape_page(query, location, page_num, remote_only)
+                    page_jobs = await self._scrape_page(
+                        query, location, page_num, remote_only,
+                        max_results=max_results,
+                        current_count=len(jobs)
+                    )
                     break  # Success, exit retry loop
                 except Exception as e:
                     logger.error(f"❌ Error scraping page {page_num + 1}: {e}")
@@ -533,7 +560,9 @@ class IndeedKameleoScraper(BaseScraper):
         query: str,
         location: str,
         page_num: int,
-        remote_only: bool
+        remote_only: bool,
+        max_results: int = None,
+        current_count: int = 0
     ) -> List[JobListing]:
         """Scrape a single page of Indeed results"""
         # Build search URL
@@ -556,7 +585,7 @@ class IndeedKameleoScraper(BaseScraper):
             page.set_default_timeout(30000)
 
             # Add random delay before navigation (simulate human behavior)
-            delay = random.uniform(3.0, 7.0)
+            delay = random.uniform(0.5, 1.0)
             logger.debug(f"Adding {delay:.2f}s delay to simulate human behavior...")
             await page.wait_for_timeout(int(delay * 1000))
 
@@ -614,9 +643,73 @@ class IndeedKameleoScraper(BaseScraper):
 
                 logger.info(f"✅ Successfully extracted {len(jobs)} jobs from mosaic JSON on page {page_num}")
 
-                # Log found jobs
-                for idx, job in enumerate(jobs, 1):
+                # Limit jobs to process based on max_results to avoid unnecessary page loads
+                if max_results is not None:
+                    jobs_needed = max_results - current_count
+                    if jobs_needed <= 0:
+                        logger.info(f"Already have {current_count} jobs, skipping company website extraction")
+                        return jobs[:jobs_needed]  # Return empty list or remaining needed
+
+                    if len(jobs) > jobs_needed:
+                        logger.info(f"Only processing company websites for first {jobs_needed} of {len(jobs)} jobs to respect max_results={max_results}")
+                        jobs_to_process = jobs[:jobs_needed]
+                    else:
+                        jobs_to_process = jobs
+                else:
+                    jobs_to_process = jobs
+
+                # Extract company websites for each job (only for jobs that will be returned)
+                logger.info(f"Extracting company websites for {len(jobs_to_process)} jobs...")
+                for idx, job in enumerate(jobs_to_process, 1):
                     logger.info(f"Job {idx}/{len(jobs)}: {job.title} at {job.company}")
+
+                    # Add random delay before processing each job to avoid rate limiting
+                    delay = random.uniform(3.0, 6.0)
+                    logger.debug(f"  → Waiting {delay:.1f}s before processing next company...")
+                    await asyncio.sleep(delay)
+
+                    company_url = None
+
+                    # Check if we have a company URL to extract from
+                    if hasattr(job, '_company_url') and job._company_url:
+                        company_url = job._company_url
+                        logger.debug(f"  → Got company URL from job post: {company_url}")
+                    elif hasattr(job, '_needs_company_url') and job._needs_company_url and job.url:
+                        # Need to extract company URL from job page first
+                        try:
+                            logger.debug(f"  → Extracting company URL from job page...")
+                            company_url = await self._extract_company_url_from_job_page(job.url)
+                            if company_url:
+                                logger.debug(f"  → Found company URL: {company_url}")
+                            else:
+                                logger.debug(f"  → No company URL found on job page")
+                            # Add delay after job page visit
+                            await asyncio.sleep(random.uniform(2.0, 4.0))
+                        except Exception as e:
+                            logger.warning(f"  → Failed to extract company URL from job page: {e}")
+                    else:
+                        logger.debug(f"  → No company URL available for this job")
+
+                    # Now extract company website if we have a company URL
+                    if company_url:
+                        try:
+                            company_website = await self._extract_company_website(company_url)
+                            if company_website:
+                                job.company_website = company_website
+                                logger.info(f"  → Company website: {company_website}")
+                            else:
+                                logger.debug(f"  → No company website found")
+
+                        except Exception as e:
+                            logger.warning(f"  → Failed to extract company website: {e}")
+                    else:
+                        logger.debug(f"  → No company URL available")
+
+                    # Clean up temporary attributes
+                    if hasattr(job, '_company_url'):
+                        delattr(job, '_company_url')
+                    if hasattr(job, '_needs_company_url'):
+                        delattr(job, '_needs_company_url')
 
                 return jobs
 
@@ -661,9 +754,68 @@ class IndeedKameleoScraper(BaseScraper):
 
             logger.info(f"✅ Successfully parsed {len(jobs)} jobs from DOM on page {page_num}")
 
-            # Log found jobs
-            for idx, job in enumerate(jobs, 1):
+            # Limit jobs to process based on max_results to avoid unnecessary page loads
+            if max_results is not None:
+                jobs_needed = max_results - current_count
+                if jobs_needed <= 0:
+                    logger.info(f"Already have {current_count} jobs, skipping company website extraction")
+                    return jobs[:jobs_needed]  # Return empty list or remaining needed
+
+                if len(jobs) > jobs_needed:
+                    logger.info(f"Only processing company websites for first {jobs_needed} of {len(jobs)} jobs to respect max_results={max_results}")
+                    jobs_to_process = jobs[:jobs_needed]
+                else:
+                    jobs_to_process = jobs
+            else:
+                jobs_to_process = jobs
+
+            # Extract company websites for each job (only for jobs that will be returned)
+            logger.info(f"Extracting company websites for {len(jobs_to_process)} jobs...")
+            for idx, job in enumerate(jobs_to_process, 1):
                 logger.info(f"Job {idx}/{len(jobs)}: {job.title} at {job.company}")
+
+                # Add random delay before processing each job to avoid rate limiting
+                delay = random.uniform(3.0, 6.0)
+                logger.debug(f"  → Waiting {delay:.1f}s before processing next company...")
+                await asyncio.sleep(delay)
+
+                company_url = None
+
+                # Check if we have a company URL to extract from
+                if hasattr(job, '_company_url') and job._company_url:
+                    company_url = job._company_url
+                elif job.url:
+                    # Need to extract company URL from job page
+                    try:
+                        logger.debug(f"  → Extracting company URL from job page...")
+                        company_url = await self._extract_company_url_from_job_page(job.url)
+                        if company_url:
+                            logger.debug(f"  → Found company URL: {company_url}")
+                        else:
+                            logger.debug(f"  → No company URL found on job page")
+                        # Add delay after job page visit
+                        await asyncio.sleep(random.uniform(2.0, 4.0))
+                    except Exception as e:
+                        logger.warning(f"  → Failed to extract company URL from job page: {e}")
+
+                # Now extract company website if we have a company URL
+                if company_url:
+                    try:
+                        company_website = await self._extract_company_website(company_url)
+                        if company_website:
+                            job.company_website = company_website
+                            logger.info(f"  → Company website: {company_website}")
+                        else:
+                            logger.debug(f"  → No company website found")
+
+                    except Exception as e:
+                        logger.warning(f"  → Failed to extract company website: {e}")
+                else:
+                    logger.debug(f"  → No company URL available")
+
+                # Clean up temporary attribute
+                if hasattr(job, '_company_url'):
+                    delattr(job, '_company_url')
 
             return jobs
 
@@ -712,6 +864,17 @@ class IndeedKameleoScraper(BaseScraper):
             company_elem = card.find('span', {'data-testid': 'company-name'})
             company = company_elem.get_text(strip=True) if company_elem else "Unknown"
 
+            # Extract company URL if available
+            company_url = None
+            company_link = card.find('a', {'data-testid': 'company-name'}) or card.find('a', href=re.compile(r'/cmp/'))
+            if company_link and company_link.get('href'):
+                href = company_link.get('href')
+                # Build full company URL
+                if href.startswith('/cmp/'):
+                    company_url = f"{self.base_url}{href}"
+                elif 'indeed.com/cmp/' in href:
+                    company_url = href
+
             # Extract location
             location_elem = card.find('div', {'data-testid': 'text-location'})
             location = location_elem.get_text(strip=True) if location_elem else "Remote"
@@ -739,8 +902,13 @@ class IndeedKameleoScraper(BaseScraper):
                 posted_date=posted_date,
                 board_source=JobBoard.INDEED,
                 remote_type="Remote" if "remote" in location.lower() else None,
-                scraped_at=datetime.now()
+                scraped_at=datetime.now(),
+                company_website=None,  # Will be populated later
             )
+
+            # Store company URL temporarily for extraction
+            if company_url:
+                job_listing._company_url = company_url
 
             # Log parsed fields
             # logger.debug("Parsed DOM job fields:")
@@ -787,6 +955,252 @@ class IndeedKameleoScraper(BaseScraper):
             return datetime.now() - timedelta(days=number * 30)
         else:
             return datetime.now()
+
+    async def _extract_company_url_from_job_page(self, job_url: str) -> Optional[str]:
+        """
+        Extract Indeed company page URL (not the actual company website) with parameters from a job detail page.
+
+        Terminology:
+        - This extracts the Indeed company detail page URL (e.g., indeed.com/cmp/Google)
+        - NOT the actual hiring company's website (e.g., www.google.com)
+        - The company website is extracted later via _extract_company_website()
+
+        Indeed requires specific tracking parameters (campaignid, from, tk, fromjk) on company URLs
+        to avoid bot detection. These are dynamically generated on the job page.
+
+        Args:
+            job_url: URL to Indeed job page (e.g., https://www.indeed.com/viewjob?jk=abc123)
+
+        Returns:
+            Full Indeed company page URL with parameters (e.g., 'https://www.indeed.com/cmp/Company-Name?campaignid=...&from=...&tk=...&fromjk=...')
+            or None if not found
+        """
+        page = None
+        try:
+            logger.debug(f"Extracting company URL from job page: {job_url}")
+
+            # Create new page from context
+            page = await self.context.new_page()
+            page.set_default_timeout(15000)
+
+            # Add small delay before navigation
+            delay = random.uniform(1.0, 2.0)
+            await page.wait_for_timeout(int(delay * 1000))
+
+            # Navigate to job page
+            response = await page.goto(job_url, wait_until='domcontentloaded', timeout=15000)
+
+            if response.status >= 400:
+                logger.warning(f"Job page returned status {response.status}: {job_url}")
+                return None
+
+            # Wait for content to load
+            await page.wait_for_timeout(1000)
+
+            # Get page content
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+
+            # Look for company profile link with full parameters
+            # Indeed shows company links with various patterns
+            company_link_patterns = [
+                soup.find('a', href=re.compile(r'/cmp/.*\?')),  # Links with query parameters
+                soup.find('a', href=re.compile(r'/cmp/')),  # Links without parameters (fallback)
+                soup.find('a', {'data-testid': re.compile(r'employer.*link', re.I)}),
+                soup.find('div', {'data-testid': 'jobsearch-CompanyAvatar'}),
+            ]
+
+            for link_or_container in company_link_patterns:
+                if not link_or_container:
+                    continue
+
+                # If it's a container, find the link inside
+                if link_or_container.name == 'div':
+                    link = link_or_container.find('a', href=True)
+                else:
+                    link = link_or_container
+
+                if link and link.get('href'):
+                    href = link.get('href')
+
+                    # Build full URL if needed
+                    if href.startswith('/cmp/'):
+                        company_url = f"{self.base_url}{href}"
+                    elif 'indeed.com/cmp/' in href:
+                        company_url = href
+                    else:
+                        continue
+
+                    # Log whether we found parameters
+                    has_params = '?' in company_url
+                    if has_params:
+                        logger.debug(f"Found company URL with tracking parameters from job page: {company_url}")
+                    else:
+                        logger.debug(f"Found company URL without parameters from job page: {company_url}")
+
+                    return company_url
+
+            logger.debug(f"No company URL found on job page: {job_url}")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Error extracting company URL from job page {job_url}: {e}")
+            return None
+        finally:
+            if page:
+                await page.close()
+
+    async def _extract_company_website(self, company_url: str) -> Optional[str]:
+        """
+        Extract company website domain from Indeed company page.
+
+        Args:
+            company_url: URL to Indeed company page (e.g., https://www.indeed.com/cmp/Company-Name)
+
+        Returns:
+            Company website domain (e.g., 'company.com') or None if not found
+        """
+        page = None
+        try:
+            logger.debug(f"Extracting company website from: {company_url}")
+
+            # Create new page from context
+            page = await self.context.new_page()
+            page.set_default_timeout(20000)  # 20 second timeout for company pages
+
+            # Add random delay before navigation to simulate human behavior
+            delay = random.uniform(2.0, 4.0)
+            logger.debug(f"  → Waiting {delay:.1f}s before navigating to company page...")
+            await page.wait_for_timeout(int(delay * 1000))
+
+            # Navigate to company page
+            response = await page.goto(company_url, wait_until='domcontentloaded', timeout=20000)
+
+            if response.status >= 400:
+                logger.warning(f"Company page returned status {response.status}: {company_url}")
+                return None
+
+            # Wait for content to load with random delay
+            content_load_delay = random.uniform(500, 1000)
+            await page.wait_for_timeout(int(content_load_delay))
+
+            # Get page content
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+
+            # Strategy 1: Look for company website link with common patterns
+            # Indeed typically shows company website in the "About" section or header
+            website_patterns = [
+                # Pattern 1: Link with data-testid="companyLink[]" inside companyInfo-companyWebsite
+                soup.find('li', {'data-testid': 'companyInfo-companyWebsite'}),
+                # Pattern 2: Link with specific text
+                soup.find('a', string=re.compile(r'(company website|visit website|website)', re.I)),
+                # Pattern 3: Link with data-testid containing "website"
+                soup.find('a', {'data-testid': re.compile(r'website', re.I)}),
+                # Pattern 4: Link in company info section
+                soup.find('div', class_=re.compile(r'company.*info', re.I)),
+            ]
+
+            for pattern_result in website_patterns:
+                if pattern_result:
+                    # If it's a div or li, find links within it
+                    if pattern_result.name in ['div', 'li']:
+                        links = pattern_result.find_all('a', href=True)
+                        for link in links:
+                            href = link.get('href', '')
+                            # Filter out Indeed internal links
+                            if href and not any(x in href.lower() for x in ['indeed.com', 'javascript:', 'mailto:', '#']):
+                                domain = self._extract_domain_from_url(href)
+                                if domain:
+                                    logger.info(f"✅ Found company website via pattern: {domain}")
+                                    return domain
+                    else:
+                        # It's an anchor tag
+                        href = pattern_result.get('href', '')
+                        if href and not any(x in href.lower() for x in ['indeed.com', 'javascript:', 'mailto:', '#']):
+                            domain = self._extract_domain_from_url(href)
+                            if domain:
+                                logger.info(f"✅ Found company website via link: {domain}")
+                                return domain
+
+            # Strategy 2: Look for external links (not indeed.com)
+            all_links = soup.find_all('a', href=True)
+            for link in all_links:
+                href = link.get('href', '')
+                # Skip internal links, social media, and common non-website links
+                skip_domains = [
+                    'indeed.com', 'linkedin.com', 'facebook.com', 'twitter.com',
+                    'instagram.com', 'youtube.com', 'glassdoor.com',
+                    'javascript:', 'mailto:', '#', '/cmp/', '/jobs'
+                ]
+
+                if href and not any(x in href.lower() for x in skip_domains):
+                    # Check if it looks like a company website
+                    if href.startswith('http'):
+                        domain = self._extract_domain_from_url(href)
+                        if domain:
+                            logger.info(f"✅ Found company website via external link: {domain}")
+                            return domain
+
+            # Strategy 3: Check for structured data (JSON-LD)
+            json_ld_scripts = soup.find_all('script', type='application/ld+json')
+            for script in json_ld_scripts:
+                try:
+                    data = json.loads(script.string)
+                    if isinstance(data, dict):
+                        # Look for organization schema
+                        if data.get('@type') == 'Organization':
+                            url = data.get('url')
+                            if url:
+                                domain = self._extract_domain_from_url(url)
+                                if domain:
+                                    logger.info(f"✅ Found company website via JSON-LD: {domain}")
+                                    return domain
+                except:
+                    continue
+
+            logger.debug(f"No company website found on page: {company_url}")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Error extracting company website from {company_url}: {e}")
+            return None
+        finally:
+            if page:
+                await page.close()
+
+    def _extract_domain_from_url(self, url: str) -> Optional[str]:
+        """
+        Extract clean domain from URL.
+
+        Args:
+            url: Full URL
+
+        Returns:
+            Domain (e.g., 'company.com') or None
+        """
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            domain = parsed.netloc or parsed.path
+
+            # Remove 'www.' prefix
+            if domain.startswith('www.'):
+                domain = domain[4:]
+
+            # Basic validation - should have at least one dot
+            if '.' not in domain:
+                return None
+
+            # Remove trailing slash or path components
+            domain = domain.split('/')[0]
+
+            return domain if domain else None
+
+        except Exception as e:
+            logger.debug(f"Error parsing domain from URL '{url}': {e}")
+            return None
 
     async def get_job_details(self, job_url: str) -> Optional[JobListing]:
         """Get detailed job information (not implemented for MVP)"""
